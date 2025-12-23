@@ -8,7 +8,6 @@ from interactions_metrics import summarize_interactions
 from users_metrics import summarize_users
 from threads_metrics import summarize_threads
 
-
 def main():
     data_dir = Path("data")
     paths = sorted(data_dir.glob("*.csv"))
@@ -38,6 +37,7 @@ def main():
     # Pass 1: threads
     for path in threads_paths:
         name = path.name
+        print(f"[threads] processing {name}")
         res = summarize_threads(path)
         threads_data["files"].append({
             "file": name,
@@ -53,6 +53,7 @@ def main():
     # Pass 2: users
     for path in users_paths:
         name = path.name
+        print(f"[users] processing {name}")
         res = summarize_users(path)
         users_data["files"].append({
             "file": name,
@@ -75,6 +76,7 @@ def main():
     # Pass 3: posts
     for path in posts_paths:
         name = path.name
+        print(f"[posts] processing {name}")
         res = summarize_posts(path)
         posts_data["files"].append({
             "file": name,
@@ -113,6 +115,7 @@ def main():
     # Pass 4: interactions
     for path in interactions_paths:
         name = path.name
+        print(f"[interactions] processing {name}")
         res = summarize_interactions(path)
         interactions_data["files"].append({"file": name, **{k: v for k, v in res.items() if k != "thread_ids"}})
         interactions_data["totals"]["rows"] += res.get("rows", 0)
@@ -198,7 +201,6 @@ def main():
 
     out_path = Path("metrics/summary.json")
     out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
-
 
 if __name__ == "__main__":
     main()
