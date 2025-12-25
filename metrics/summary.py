@@ -202,5 +202,12 @@ def main():
     out_path = Path("metrics/summary.json")
     out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
 
+    # Emit user_id list separately for downstream de-duping across runs/machines
+    ids_out = Path("metrics/userids.json")
+    ids_out.write_text(
+        json.dumps({"user_ids": sorted(users_data["unique_user_ids"])} , indent=2),
+        encoding="utf-8",
+    )
+
 if __name__ == "__main__":
     main()
