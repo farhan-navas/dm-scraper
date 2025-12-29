@@ -10,7 +10,7 @@ from scraper.post_scraper import scrape_thread
 
 
 def main() -> None:
-    thread_url = "https://www.personalitycafe.com/threads/ask-an-istj-relationship-question-thread.63195/"
+    thread_url = "https://www.personalitycafe.com/threads/you-know-youre-a-judger-when.38411/"
     thread_page_limit = 10
     posts_csv_path = "posts.csv"
     users_csv_path = "users.csv"

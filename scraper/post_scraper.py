@@ -1,8 +1,8 @@
 import hashlib
+import json
 import re
 from datetime import datetime
-from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 from uuid import uuid4
 
 from bs4 import BeautifulSoup
@@ -12,6 +12,9 @@ from scraper.user_scraper import get_or_fetch_user, extract_user_id_from_profile
 
 BASE_URL = "https://www.personalitycafe.com"
 
+# Endpoint for loading hidden nested replies.
+LOAD_MORE_POSTS_PATH = "/threads/load-more-posts/"
+
 # Thread index selectors
 THREAD_CARD_SELECTOR = "div.structItem--thread"
 THREAD_LINK_SELECTOR = "h3.structItem-title a"
@@ -19,6 +22,8 @@ NEXT_PAGE_SELECTOR = "a.pageNav-jump--next"
 
 # Post selectors
 POST_SELECTOR = "article.js-post, div.MessageCard.js-post"
+TOGGLE_REPLIES_SELECTOR = ".toggle-replies-button"
+NESTED_REPLY_LABEL_SELECTOR = ".js-nested-reply-label:not(.hidden)"
 USERNAME_SELECTOR = ".MessageCard__user-info__name"
 BODY_SELECTOR = ".message-body .bbWrapper"
 QUOTE_BLOCK_SELECTOR = "blockquote.bbCodeBlock--quote"
@@ -49,6 +54,74 @@ def _thread_id_from_url(thread_url: str) -> str:
     if match:
         return match.group(1)
     return hashlib.sha1(thread_url.encode("utf-8", "ignore")).hexdigest()[:16]
+
+def _absolute_load_more_url() -> str:
+    return BASE_URL + LOAD_MORE_POSTS_PATH
+
+def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
+    """Fetch hidden replies for a single nested reply toggle label.
+
+    Returns a list of HTML fragments (strings) for child replies; empty list on failure.
+    """
+    parent_post_id = label.get("parent-post")
+    parent_level = label.get("parent-level")
+    thread_id = label.get("thread-id")
+
+    if not parent_post_id or not thread_id:
+        return []
+
+    # Keep the request lean; the endpoint responds fine without optional counters or CSRF token.
+    params = {
+        "parent_post_id": parent_post_id,
+        "parent_post_level": parent_level,
+        "thread_id": thread_id,
+        "_xfRequestUri": request_uri,
+        "_xfWithData": 1,
+        "_xfResponseType": "json",
+    }
+
+    url = _absolute_load_more_url() + "?" + urlencode(params, doseq=True)
+
+    try:
+        resp_text = fetch(url)
+        data = json.loads(resp_text)
+    except Exception as exc:
+        print(f"[nested] Failed to load replies for parent {parent_post_id}: {exc}")
+        return []
+
+    # XenForo returns {'html': {'content': '<div>...</div>'}} typically
+    html_fragments: list[str] = []
+    if isinstance(data, dict):
+        html_block = data.get("html") or {}
+        if isinstance(html_block, dict):
+            content = html_block.get("content")
+            if content:
+                html_fragments.append(content)
+        # Some variants return 'messages'
+        messages = data.get("messages")
+        if isinstance(messages, list):
+            html_fragments.extend([m for m in messages if isinstance(m, str)])
+    return html_fragments
+
+def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
+    """Find visible nested-reply toggles, fetch their children, and append to DOM."""
+    parsed = urlparse(page_url)
+    request_uri = parsed.path
+    if parsed.query:
+        request_uri += "?" + parsed.query
+
+    labels = soup.select(NESTED_REPLY_LABEL_SELECTOR)
+    for label in labels:
+        fragments = _load_nested_replies_for_label(label, request_uri=request_uri)
+        if not fragments:
+            continue
+        container = label.find_previous("div", class_="js-nested-children-container")
+        if not container:
+            continue
+        for fragment in fragments:
+            frag_soup = BeautifulSoup(fragment, "html.parser")
+            for child in frag_soup.contents:
+                container.append(child)
 
 def _parse_post_id_from_quote_link(link) -> str | None:
     if not link:
@@ -347,6 +420,7 @@ def scrape_thread(
         print(f"[scrape-thread] Fetching page {page_url}")
         html = fetch(page_url)
         soup = BeautifulSoup(html, "html.parser")
+        _inject_nested_replies(soup, page_url)
         page_posts = parse_posts_from_page(soup)
 
         for p in page_posts:
