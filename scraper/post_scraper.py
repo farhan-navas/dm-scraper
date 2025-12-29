@@ -18,7 +18,7 @@ THREAD_LINK_SELECTOR = "h3.structItem-title a"
 NEXT_PAGE_SELECTOR = "a.pageNav-jump--next"
 
 # Post selectors
-POST_SELECTOR = "article.js-post"
+POST_SELECTOR = "article.js-post, div.MessageCard.js-post"
 USERNAME_SELECTOR = ".MessageCard__user-info__name"
 BODY_SELECTOR = ".message-body .bbWrapper"
 QUOTE_BLOCK_SELECTOR = "blockquote.bbCodeBlock--quote"
@@ -35,11 +35,9 @@ def _is_member_link(href: str | None) -> bool:
     """Return True when href looks like a member profile link."""
     return bool(href and "/members/" in href)
 
-
 def _current_scrape_timestamp() -> str:
     """Return an ISO8601 timestamp used for row-level bookkeeping."""
     return datetime.now().isoformat(timespec="seconds") + "Z"
-
 
 def _thread_id_from_url(thread_url: str) -> str:
     """Derive a stable thread identifier from the thread URL."""
@@ -51,7 +49,6 @@ def _thread_id_from_url(thread_url: str) -> str:
     if match:
         return match.group(1)
     return hashlib.sha1(thread_url.encode("utf-8", "ignore")).hexdigest()[:16]
-
 
 def _parse_post_id_from_quote_link(link) -> str | None:
     if not link:
@@ -255,6 +252,10 @@ def _build_interactions_for_post(
     quotes: list[dict],
     mentions: list[dict],
     post_author_index: dict[str, dict],
+    starter_post_id: str | None,
+    starter_user_id: str | None,
+    prev_post_id: str | None,
+    prev_user_id: str | None,
 ) -> list[dict]:
     interactions: list[dict] = []
     replying_post_id = post_row.get("post_id")
@@ -300,6 +301,22 @@ def _build_interactions_for_post(
             "scraped_at": scraped_at,
         })
 
+    # Default interaction: treat every post as a reply; aim at previous post when available, otherwise thread starter.
+    target_post_id = prev_post_id or starter_post_id
+    target_user_id = prev_user_id or starter_user_id
+    confidence = 0.6 if prev_post_id else 0.5
+    interactions.append({
+        "interaction_id": str(uuid4()),
+        "replying_post_id": replying_post_id,
+        "target_post_id": target_post_id,
+        "source_user_id": source_user_id,
+        "target_user_id": target_user_id,
+        "thread_id": thread_id,
+        "interaction_type": "reply",
+        "confidence": confidence,
+        "scraped_at": scraped_at,
+    })
+
     return interactions
 
 def scrape_thread(
@@ -317,6 +334,11 @@ def scrape_thread(
     post_author_index: dict[str, dict] = {}
     thread_id = _thread_id_from_url(thread_url)
     thread_scrape_ts = _current_scrape_timestamp()
+
+    starter_post_id: str | None = None
+    starter_user_id: str | None = None
+    prev_post_id: str | None = None
+    prev_user_id: str | None = None
 
     page_url = thread_url
     page = 1
@@ -364,6 +386,9 @@ def scrape_thread(
                     "user_id": user_id,
                     "username": username,
                 }
+                if starter_post_id is None:
+                    starter_post_id = post_id
+                    starter_user_id = user_id
 
             interactions.extend(
                 _build_interactions_for_post(
@@ -372,8 +397,16 @@ def scrape_thread(
                     quotes=quotes,
                     mentions=mentions,
                     post_author_index=post_author_index,
+                    starter_post_id=starter_post_id,
+                    starter_user_id=starter_user_id,
+                    prev_post_id=prev_post_id,
+                    prev_user_id=prev_user_id,
                 )
             )
+
+            if post_id:
+                prev_post_id = post_id
+                prev_user_id = user_id
 
         if max_pages is not None and page >= max_pages:
             break

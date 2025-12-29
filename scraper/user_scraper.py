@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 
 from scraper.rate_limiter import fetch
 
-
 def _safe_text(element) -> str | None:
     if not element:
         return None

@@ -90,7 +90,7 @@ def scrape_single_forum(
                     max_pages=thread_page_limit,
                     forum_url=forum_url,
                 )
-            except Exception as exc:  # noqa: BLE001 - continue on thread failure
+            except Exception as exc:  # continue on thread failure
                 print(f"[main] Error scraping {t_url}: {exc}")
                 continue
 

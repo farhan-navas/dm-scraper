@@ -19,10 +19,11 @@ def summarize_users(path: Path) -> dict:
             username = row.get("username")
             if not username:
                 totals["missing_username"] += 1
+                full_username = f"{username}.{uid}"
             if not row.get("join_date"):
                 totals["missing_join_date"] += 1
             if uid:
-                unique_user_ids.add(uid)
+                unique_user_ids.add(full_username)
                 info = {
                     "gender": row.get("gender"),
                     "role": row.get("role"),
