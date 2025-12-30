@@ -1,3 +1,4 @@
+import os
 import hashlib
 import json
 import re
@@ -11,6 +12,17 @@ from scraper.rate_limiter import fetch
 from scraper.user_scraper import get_or_fetch_user, extract_user_id_from_profile_url
 
 BASE_URL = "https://www.personalitycafe.com"
+ALLOWED_REACTIONS = {
+    "like",
+    "love",
+    "haha",
+    "wow",
+    "sad",
+    "angry",
+    "thanks",
+    "agree",
+    "disagree",
+}
 
 # Endpoint for loading hidden nested replies.
 LOAD_MORE_POSTS_PATH = "/threads/load-more-posts/"
@@ -28,6 +40,7 @@ USERNAME_SELECTOR = ".MessageCard__user-info__name"
 BODY_SELECTOR = ".message-body .bbWrapper"
 QUOTE_BLOCK_SELECTOR = "blockquote.bbCodeBlock--quote"
 QUOTE_SOURCE_LINK_SELECTOR = ".bbCodeBlock-sourceJump"
+REACTION_BAR_SELECTOR = ".california-reaction-bar"
 
 def absolute_url(href: str) -> str:
     if href.startswith("http"):
@@ -57,6 +70,18 @@ def _thread_id_from_url(thread_url: str) -> str:
 
 def _absolute_load_more_url() -> str:
     return BASE_URL + LOAD_MORE_POSTS_PATH
+
+
+def _normalize_reaction_name(raw) -> str | None:
+    """Lowercase a reaction label and drop anything outside the allowed set."""
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+    if text in ALLOWED_REACTIONS:
+        return text
+    return None
 
 def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
     """Fetch hidden replies for a single nested reply toggle label.
@@ -185,6 +210,78 @@ def _extract_mentions(body_el) -> list[dict]:
         })
     return mentions
 
+def _extract_reaction_bar(post_div) -> dict | None:
+    """try to extract a reaction bar from a post"""
+    bar = post_div.select_one(REACTION_BAR_SELECTOR)
+    if not bar:
+        return None
+
+    reaction_types: list[dict] = []
+    for span in bar.select("ul.reactionSummary span.reaction"):
+        rid = span.get("data-reaction-id") or span.get("data-reactionid")
+        name = None
+        img = span.find("img", class_="reaction-sprite")
+        if img:
+            name = img.get("alt") or img.get("title")
+        if not name:
+            name = span.get("title")
+        reaction_types.append({
+            "reaction_id": str(rid) if rid else None,
+            "reaction": _normalize_reaction_name(name),
+        })
+
+    link = bar.select_one("a.reactionsBar-link")
+    overlay_url = absolute_url(str(link.get("href"))) if link and link.get("href") else None
+    preview_names = [el.get_text(strip=True) for el in (link.select("bdi") if link else []) if el.get_text(strip=True)]
+    others_count = 0
+    if link:
+        text = link.get_text(" ", strip=True)
+        match = re.search(r"and\s+(\d+)\s+others", text)
+        if match:
+            others_count = int(match.group(1))
+
+    return {
+        "overlay_url": overlay_url,
+        "reaction_types": reaction_types,
+        "preview_names": preview_names,
+        "others_count": others_count,
+    }
+
+def _parse_reaction_overlay(url: str) -> list[dict]:
+    cookie_val = os.environ.get("CDNCSRF")
+    cookies = {"cdncsrf": cookie_val}
+    try:
+        html = fetch(url, cookies=cookies)
+    except Exception as exc:
+        print(f"[reactions] Failed to fetch overlay {url}: {exc}")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    entries: list[dict] = []
+    for row in soup.select(".block-row"):
+        reaction_span = row.select_one(".reaction")
+        rid = reaction_span.get("data-reaction-id") if reaction_span else None
+        reaction_name = None
+        if reaction_span:
+            img = reaction_span.find("img")
+            if img:
+                reaction_name = img.get("alt") or img.get("title")
+            if not reaction_name:
+                reaction_name = reaction_span.get("title")
+
+        user_link = row.select_one("a[href*='/members/']")
+        profile_url = absolute_url(str(user_link.get("href"))) if user_link and user_link.get("href") else None
+        username = user_link.get_text(" ", strip=True) if user_link else None
+        entries.append({
+            "reaction_id": str(rid) if rid else None,
+            "reaction": _normalize_reaction_name(reaction_name),
+            "profile_url": profile_url,
+            "username": username,
+            "user_id": extract_user_id_from_profile_url(profile_url) if profile_url else None,
+        })
+
+    return entries
+
 def get_thread_list(
     forum_url: str,
     max_pages: int | None,
@@ -302,6 +399,7 @@ def parse_posts_from_page(soup: BeautifulSoup):
         text = body_el.get_text("\n", strip=True) if body_el else None
         quotes = _extract_quote_targets(post_div)
         mentions = _extract_mentions(body_el)
+        reactions = _extract_reaction_bar(post_div)
 
         # Post ID
         post_id = _extract_post_id(post_div)
@@ -314,6 +412,7 @@ def parse_posts_from_page(soup: BeautifulSoup):
             "text": text,
             "quotes": quotes,
             "mentions": mentions,
+            "reactions": reactions,
         })     
 
     return posts
@@ -324,6 +423,7 @@ def _build_interactions_for_post(
     post_row: dict,
     quotes: list[dict],
     mentions: list[dict],
+    reactions: dict | None,
     post_author_index: dict[str, dict],
     starter_post_id: str | None,
     starter_user_id: str | None,
@@ -337,6 +437,43 @@ def _build_interactions_for_post(
 
     source_user_id = post_row.get("user_id")
     scraped_at = post_row.get("scraped_at")
+
+    reaction_entries: list[dict] = []
+    if reactions:
+        overlay_url = reactions.get("overlay_url")
+        if overlay_url:
+            reaction_entries = _parse_reaction_overlay(overlay_url)
+        if not reaction_entries:
+            reaction_types = reactions.get("reaction_types") or []
+            fallback = reaction_types[0] if reaction_types else {}
+            fallback_reaction = _normalize_reaction_name(fallback.get("reaction"))
+            for name in reactions.get("preview_names", []):
+                reaction_entries.append({
+                    "reaction_id": fallback.get("reaction_id"),
+                    "reaction": fallback_reaction,
+                    "username": name,
+                    "profile_url": None,
+                    "user_id": None,
+                })
+
+    for reaction in reaction_entries:
+        if not reaction.get("user_id") and not reaction.get("username"):
+            continue
+        interaction_type = _normalize_reaction_name(reaction.get("reaction"))
+        if not interaction_type:
+            continue
+        interaction_type = f"reaction-{interaction_type}"
+        interactions.append({
+            "interaction_id": str(uuid4()),
+            "replying_post_id": replying_post_id,
+            "target_post_id": replying_post_id,
+            "source_user_id": reaction.get("user_id"),
+            "target_user_id": source_user_id,
+            "thread_id": thread_id,
+            "interaction_type": interaction_type,
+            "confidence": 0.9,
+            "scraped_at": scraped_at,
+        })
 
     for quote in quotes:
         target_post_id = quote.get("target_post_id")
@@ -470,6 +607,7 @@ def scrape_thread(
                     post_row=post_row,
                     quotes=quotes,
                     mentions=mentions,
+                    reactions=p.get("reactions"),
                     post_author_index=post_author_index,
                     starter_post_id=starter_post_id,
                     starter_user_id=starter_user_id,

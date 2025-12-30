@@ -15,3 +15,5 @@ metrics/*.json
 *.csv
 !forums-*.csv
 *.sh
+
+*.env

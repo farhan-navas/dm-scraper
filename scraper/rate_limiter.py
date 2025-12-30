@@ -47,15 +47,16 @@ def _get_limiter() -> RateLimiter:
     assert _limiter is not None
     return _limiter
 
-def fetch(url: str, max_retries: int = 3) -> str:
+def fetch(url: str, max_retries: int = 3, cookies=None) -> str:
     """
     Rate-limited GET with basic retry + 429/5xx backoff.
     Returns HTML text or raises the last exception.
+    Can pass in cookie if necessary
     """
     for attempt in range(1, max_retries + 1):
         _get_limiter().wait()
         try:
-            resp = SESSION.get(url, timeout=15)
+            resp = SESSION.get(url, timeout=15, cookies=cookies)
         except requests.RequestException as e:
             print(f"[fetch] Error on {url}: {e} (attempt {attempt}/{max_retries})")
             if attempt == max_retries:
