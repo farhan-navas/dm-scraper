@@ -10,12 +10,12 @@ from scraper.post_scraper import scrape_thread
 
 
 def main() -> None:
-    thread_url = "https://www.personalitycafe.com/threads/you-know-youre-a-judger-when.38411/"
-    thread_page_limit = 10
-    posts_csv_path = "posts.csv"
-    users_csv_path = "users.csv"
-    interactions_csv_path = "interactions.csv"
-    threads_csv_path = "threads.csv"
+    thread_url = "https://www.personalitycafe.com/threads/are-you-a-nerd.1382974/"
+    thread_page_limit = 1
+    posts_csv_path = "data/posts.csv"
+    users_csv_path = "data/users.csv"
+    interactions_csv_path = "data/interactions.csv"
+    threads_csv_path = "data/threads.csv"
 
     user_cache: dict[str, dict] = {}
 

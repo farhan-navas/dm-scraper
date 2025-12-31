@@ -12,17 +12,6 @@ from scraper.rate_limiter import fetch
 from scraper.user_scraper import get_or_fetch_user, extract_user_id_from_profile_url
 
 BASE_URL = "https://www.personalitycafe.com"
-ALLOWED_REACTIONS = {
-    "like",
-    "love",
-    "haha",
-    "wow",
-    "sad",
-    "angry",
-    "thanks",
-    "agree",
-    "disagree",
-}
 
 # Endpoint for loading hidden nested replies.
 LOAD_MORE_POSTS_PATH = "/threads/load-more-posts/"
@@ -40,7 +29,20 @@ USERNAME_SELECTOR = ".MessageCard__user-info__name"
 BODY_SELECTOR = ".message-body .bbWrapper"
 QUOTE_BLOCK_SELECTOR = "blockquote.bbCodeBlock--quote"
 QUOTE_SOURCE_LINK_SELECTOR = ".bbCodeBlock-sourceJump"
+
+# Reaction selectors
 REACTION_BAR_SELECTOR = ".california-reaction-bar"
+ALLOWED_REACTIONS = {
+    "like",
+    "helpful",
+    "love",
+    "smile",
+    "hug",
+    "haha",
+    "wow",
+    "face palm",
+    "sad",
+}
 
 def absolute_url(href: str) -> str:
     if href.startswith("http"):
@@ -68,9 +70,6 @@ def _thread_id_from_url(thread_url: str) -> str:
         return match.group(1)
     return hashlib.sha1(thread_url.encode("utf-8", "ignore")).hexdigest()[:16]
 
-def _absolute_load_more_url() -> str:
-    return BASE_URL + LOAD_MORE_POSTS_PATH
-
 
 def _normalize_reaction_name(raw) -> str | None:
     """Lowercase a reaction label and drop anything outside the allowed set."""
@@ -95,7 +94,7 @@ def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
     if not parent_post_id or not thread_id:
         return []
 
-    # Keep the request lean; the endpoint responds fine without optional counters or CSRF token.
+    # Keep request lean;
     params = {
         "parent_post_id": parent_post_id,
         "parent_post_level": parent_level,
@@ -105,7 +104,7 @@ def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
         "_xfResponseType": "json",
     }
 
-    url = _absolute_load_more_url() + "?" + urlencode(params, doseq=True)
+    url = BASE_URL + LOAD_MORE_POSTS_PATH + "?" + urlencode(params, doseq=True)
 
     try:
         resp_text = fetch(url)
@@ -114,7 +113,7 @@ def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
         print(f"[nested] Failed to load replies for parent {parent_post_id}: {exc}")
         return []
 
-    # XenForo returns {'html': {'content': '<div>...</div>'}} typically
+    # XenForo returns {'html': {'content': '<div>...</div>'}}
     html_fragments: list[str] = []
     if isinstance(data, dict):
         html_block = data.get("html") or {}
@@ -135,18 +134,40 @@ def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
     if parsed.query:
         request_uri += "?" + parsed.query
 
-    labels = soup.select(NESTED_REPLY_LABEL_SELECTOR)
-    for label in labels:
-        fragments = _load_nested_replies_for_label(label, request_uri=request_uri)
-        if not fragments:
-            continue
-        container = label.find_previous("div", class_="js-nested-children-container")
-        if not container:
-            continue
-        for fragment in fragments:
-            frag_soup = BeautifulSoup(fragment, "html.parser")
-            for child in frag_soup.contents:
-                container.append(child)
+    # Keep fetching until no new visible reply toggles remain, so nested "show more"
+    # controls that appear inside loaded fragments are also expanded.
+    num_f = 0
+    while True:
+        labels = [
+            label for label in soup.select(NESTED_REPLY_LABEL_SELECTOR)
+        ]
+        if not labels:
+            break
+
+        for label in labels:
+            print(f"[replies] the current label is for post-id: {label['parent-post']}")
+
+            fragments = _load_nested_replies_for_label(label, request_uri=request_uri)
+            if not fragments:
+                continue
+
+            container = label.find_previous("div", class_="js-nested-children-container")
+            if not container:
+                continue
+
+            for fragment in fragments:
+                num_f += 1
+                frag_soup = BeautifulSoup(fragment, "html.parser")
+                print(f"[fragments] frags are {frag_soup}")
+                for child in frag_soup.contents:
+                    container.append(child)
+
+            # Mark as hidden so we don't request the same label again on later passes.
+            label_classes = label.get("class") or []
+            if "hidden" not in label_classes:
+                label["class"] = label_classes + ["hidden"] # type: ignore
+            print(f"[labels] {label.get('class')}")
+    print(f"[FRAGS] the number of frags in total is {num_f}")
 
 def _parse_post_id_from_quote_link(link) -> str | None:
     if not link:
@@ -471,7 +492,6 @@ def _build_interactions_for_post(
             "target_user_id": source_user_id,
             "thread_id": thread_id,
             "interaction_type": interaction_type,
-            "confidence": 0.9,
             "scraped_at": scraped_at,
         })
 
@@ -488,7 +508,6 @@ def _build_interactions_for_post(
             "target_user_id": target_user_id,
             "thread_id": thread_id,
             "interaction_type": "quote",
-            "confidence": 1.0,
             "scraped_at": scraped_at,
         })
 
@@ -507,14 +526,12 @@ def _build_interactions_for_post(
             "target_user_id": target_user_id,
             "thread_id": thread_id,
             "interaction_type": "mention",
-            "confidence": 0.7,
             "scraped_at": scraped_at,
         })
 
     # Default interaction: treat every post as a reply; aim at previous post when available, otherwise thread starter.
     target_post_id = prev_post_id or starter_post_id
     target_user_id = prev_user_id or starter_user_id
-    confidence = 0.6 if prev_post_id else 0.5
     interactions.append({
         "interaction_id": str(uuid4()),
         "replying_post_id": replying_post_id,
@@ -523,7 +540,6 @@ def _build_interactions_for_post(
         "target_user_id": target_user_id,
         "thread_id": thread_id,
         "interaction_type": "reply",
-        "confidence": confidence,
         "scraped_at": scraped_at,
     })
 

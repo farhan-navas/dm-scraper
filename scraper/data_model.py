@@ -42,7 +42,6 @@ INTERACTIONS_FIELDNAMES: list[str] = [
     "target_user_id",
     "thread_id",
     "interaction_type",
-    "confidence",
     "scraped_at",
 ]
 
