@@ -136,14 +136,13 @@ def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
 
     # Keep fetching until no new visible reply toggles remain, so nested "show more"
     # controls that appear inside loaded fragments are also expanded.
-    num_f = 0
     while True:
         labels = [
             label for label in soup.select(NESTED_REPLY_LABEL_SELECTOR)
         ]
         if not labels:
             break
-
+        
         for label in labels:
             print(f"[replies] the current label is for post-id: {label['parent-post']}")
 
@@ -156,18 +155,19 @@ def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
                 continue
 
             for fragment in fragments:
-                num_f += 1
                 frag_soup = BeautifulSoup(fragment, "html.parser")
-                print(f"[fragments] frags are {frag_soup}")
-                for child in frag_soup.contents:
+                # I know that frag soup contains one level above of show more replies... 
+                # TODO: level 2++ of "show more replies" maybe ms or playwright...
+
+                post_nodes = frag_soup.select(POST_SELECTOR)
+
+                for child in post_nodes:
                     container.append(child)
 
             # Mark as hidden so we don't request the same label again on later passes.
             label_classes = label.get("class") or []
             if "hidden" not in label_classes:
                 label["class"] = label_classes + ["hidden"] # type: ignore
-            print(f"[labels] {label.get('class')}")
-    print(f"[FRAGS] the number of frags in total is {num_f}")
 
 def _parse_post_id_from_quote_link(link) -> str | None:
     if not link:
@@ -582,6 +582,8 @@ def scrape_thread(
             username = p.get("username")
             quotes = p.get("quotes") or []
             mentions = p.get("mentions") or []
+            text = p.get("text")
+            print(f"[TEXTS] The current text is: {text}")
 
             if profile_url:
                 user = get_or_fetch_user(profile_url, user_cache)
@@ -604,7 +606,7 @@ def scrape_thread(
                 "user_id": user_id,
                 "username": username,
                 "timestamp": p.get("timestamp"),
-                "text": p.get("text"),
+                "text": text,
                 "scraped_at": scraped_at,
             }
             all_posts.append(post_row)

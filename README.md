@@ -76,7 +76,6 @@ Schema:
 | `target_user_id`   | text        | FK → `user.user_id`, the person that is being replied to                                     |
 | `thread_id`        | text        | Convenience FK for filtering.                                                                |
 | `interaction_type` | text        | Enum (`quote`, `mention`, `implicit_reply`).                                                 |
-| `confidence`       | numeric     | Between 0–1; `1` for explicit quotes, lower when inferred heuristically.                     |
 | `scraped_at`       | timestamptz | Timestamp applied when emitting the derived edge.                                            |
 
 ## Running scraper
@@ -86,6 +85,8 @@ Orchestrator lives in `scraper/post_scraper.py`. Can be executed directly or via
 ```bash
 uv run run_forum_scrape.py
 ```
+
+More testing scripts included in `test/` directory, to find out return values of each thread/forum/user scrape
 
 Respect a conservative rate limit (polite scraping! for now, one request every 3s), and emit CSVs in `data/`. Some forums require auth, so I will need to pass in my own auth cookie, or use mechanical soup. Will figure it out.
 
@@ -102,9 +103,10 @@ COM1 (LTP):
 
 COM2 (TM):
 
-- 10 -> What's my personality type? -> threads...csv did not write out, users...csv less than expected
+- 10 -> What's my personality type?
 - 13 -> Cognitive Functions
 - 14 -> Socionomics Forum, Subs: 15
+
 - 16 -> Enneagram Personality Theory Forum, Subs: 17 to 29
 - 75 -> General Psychology, Subs: 76, 77
 - 30 -> The Generations, Subs: 31 to 34
@@ -113,13 +115,16 @@ COM2 (TM):
 - 82 -> Book, Music & Movie Reviews, Subs: 83
 - 84 -> Education & Career Talk
 - 85 -> Science and Technology, Subs: 86
+- TOTAL ROWS BEF: 8392223
 
 - Also training conv-transformer
 
 COM3 (SMP):
 
-- Sub 11 -> Guess the type
+- 7 -> Intro, Subs: 8
+- 11 -> Guess the type
 - 12 -> Myers Briggs Forum
+
 - 39 -> SJ's Temparement Forums, Subs: 40 to 47
 - 48 -> SP's Temparement Forums, Subs: 49 to 56
 - 57 -> NT's Temparement Forums, Subs: 58 to 65
@@ -127,3 +132,6 @@ COM3 (SMP):
 - 87 -> Health and Fitness
 - 98 -> Advice Center
 - 110 -> Blog
+- TOTAL ROWS BEF: 7057039
+
+\*\*COOKIE HAS 16 HOUR REFRESH RATE, take cookie from unloggedin browser pscafe page
