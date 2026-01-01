@@ -82,7 +82,7 @@ def _normalize_reaction_name(raw) -> str | None:
         return text
     return None
 
-def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
+def _load_nested_replies_for_label(label, posts_loaded: int, request_uri: str) -> list[str]:
     """Fetch hidden replies for a single nested reply toggle label.
 
     Returns a list of HTML fragments (strings) for child replies; empty list on failure.
@@ -94,15 +94,23 @@ def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
     if not parent_post_id or not thread_id:
         return []
 
-    # Keep request lean;
     params = {
         "parent_post_id": parent_post_id,
         "parent_post_level": parent_level,
         "thread_id": thread_id,
+        "posts_loaded": posts_loaded,
         "_xfRequestUri": request_uri,
         "_xfWithData": 1,
         "_xfResponseType": "json",
     }
+
+    total_reply_count = label.get("total-reply-count")
+    exact_unknown = label.get("exact-reply-count-unknown")
+    
+    if total_reply_count:
+        params["total_reply_count"] = total_reply_count
+    if exact_unknown:
+        params["exact_reply_count_unknown"] = exact_unknown
 
     url = BASE_URL + LOAD_MORE_POSTS_PATH + "?" + urlencode(params, doseq=True)
 
@@ -117,57 +125,78 @@ def _load_nested_replies_for_label(label, request_uri: str) -> list[str]:
     html_fragments: list[str] = []
     if isinstance(data, dict):
         html_block = data.get("html") or {}
-        if isinstance(html_block, dict):
-            content = html_block.get("content")
-            if content:
-                html_fragments.append(content)
-        # Some variants return 'messages'
+        if isinstance(html_block, dict) and html_block.get("content"):
+            html_fragments.append(html_block["content"])
         messages = data.get("messages")
         if isinstance(messages, list):
             html_fragments.extend([m for m in messages if isinstance(m, str)])
+
     return html_fragments
 
 def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
-    """Find visible nested-reply toggles, fetch their children, and append to DOM."""
     parsed = urlparse(page_url)
-    request_uri = parsed.path
-    if parsed.query:
-        request_uri += "?" + parsed.query
+    request_uri = parsed.path + (("?" + parsed.query) if parsed.query else "")
 
-    # Keep fetching until no new visible reply toggles remain, so nested "show more"
-    # controls that appear inside loaded fragments are also expanded.
     while True:
-        labels = [
-            label for label in soup.select(NESTED_REPLY_LABEL_SELECTOR)
-        ]
+        labels = list(soup.select(NESTED_REPLY_LABEL_SELECTOR))
         if not labels:
             break
-        
+
         for label in labels:
-            print(f"[replies] the current label is for post-id: {label['parent-post']}")
-
-            fragments = _load_nested_replies_for_label(label, request_uri=request_uri)
-            if not fragments:
-                continue
-
             container = label.find_previous("div", class_="js-nested-children-container")
+
             if not container:
+                # nothing to attach to so just hide to avoid infinite loop, this works fine at runtime
+                label["class"] = label.get("class") + ["hidden"]  # type: ignore
                 continue
+            
+            raw_pl = label.get("posts-loaded")
+            posts_loaded = int(raw_pl) if isinstance(raw_pl, str) else 0
 
-            for fragment in fragments:
-                frag_soup = BeautifulSoup(fragment, "html.parser")
-                # I know that frag soup contains one level above of show more replies... 
-                # TODO: level 2++ of "show more replies" maybe ms or playwright...
+            while True:
+                fragments = _load_nested_replies_for_label(label, request_uri=request_uri, posts_loaded=posts_loaded)
+                if not fragments:
+                    break
 
-                post_nodes = frag_soup.select(POST_SELECTOR)
+                newly_appended = 0
+                for fragment in fragments:
+                    frag_soup = BeautifulSoup(fragment, "html.parser")
+                    for child in frag_soup.select(POST_SELECTOR):
+                        container.append(child)
+                        newly_appended += 1
 
-                for child in post_nodes:
-                    container.append(child)
+                    updated = frag_soup.select_one(".js-nested-reply-label")
+                    if updated:
+                        new_total = updated.get("total-reply-count")
+                        new_exact_count_bool = updated.get("exact-reply-count-unknown")
 
-            # Mark as hidden so we don't request the same label again on later passes.
-            label_classes = label.get("class") or []
-            if "hidden" not in label_classes:
-                label["class"] = label_classes + ["hidden"] # type: ignore
+                        if new_total:
+                            label["total-reply-count"] = new_total
+                        else:
+                            label.attrs.pop("total-reply-count")
+                    
+                        if new_exact_count_bool:
+                            label["exact-reply-count-unknown"] = new_exact_count_bool
+                        else:
+                            label.attrs.pop("exact-reply-count-unknown")
+
+                if newly_appended == 0:
+                    break
+
+                posts_loaded += newly_appended
+                label["posts-loaded"] = str(posts_loaded)
+
+                # only stop early when we actually know total
+                exact_unknown = label.get("exact-reply-count-unknown")
+                raw_total = label.get("total-reply-count")
+                total = int(raw_total) if isinstance(raw_total, str) else 0
+                if not exact_unknown and total and posts_loaded >= total:
+                    break
+
+            # done with this label
+            classes = label.get("class") or []
+            if "hidden" not in classes:
+                label["class"] = classes + ["hidden"] # type: ignore
 
 def _parse_post_id_from_quote_link(link) -> str | None:
     if not link:
@@ -583,7 +612,6 @@ def scrape_thread(
             quotes = p.get("quotes") or []
             mentions = p.get("mentions") or []
             text = p.get("text")
-            print(f"[TEXTS] The current text is: {text}")
 
             if profile_url:
                 user = get_or_fetch_user(profile_url, user_cache)
