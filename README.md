@@ -96,42 +96,42 @@ New Update -> forum_scraper now takes in a int arg for the forum index that it w
 
 COM1 (LTP):
 
-- 0 -> Announcements, Subforums: 1, 2, 3, 4, 5, 6
-- 7 -> Intro, Subs: 8
-- 35 -> Other Personality Theories, Subs: 36, 37
-- 89 -> History Buffs
-
 COM2 (TM):
 
 - 10 -> What's my personality type?
 - 13 -> Cognitive Functions
 - 14 -> Socionomics Forum, Subs: 15
-
 - 16 -> Enneagram Personality Theory Forum, Subs: 17 to 29
-- 75 -> General Psychology, Subs: 76, 77
 - 30 -> The Generations, Subs: 31 to 34
+- 75 -> General Psychology, Subs: 76, 77
 - 38 -> Member Polls
 - 81 -> The Art Museum
 - 82 -> Book, Music & Movie Reviews, Subs: 83
+- 89 -> History Buffs
 - 84 -> Education & Career Talk
 - 85 -> Science and Technology, Subs: 86
+- 87 -> Health and Fitness
+- 98 -> Advice Center
+
 - TOTAL ROWS BEF: 8392223
+- TOTAL ROWS AFT:
 
 - Also training conv-transformer
 
 COM3 (SMP):
 
+- 0 -> Announcements, Subforums: 1, 2, 3, 4, 5, 6
 - 7 -> Intro, Subs: 8
 - 11 -> Guess the type
 - 12 -> Myers Briggs Forum
-
+- 35 -> Other Personality Theories, Subs: 36, 37
 - 39 -> SJ's Temparement Forums, Subs: 40 to 47
 - 48 -> SP's Temparement Forums, Subs: 49 to 56
 - 57 -> NT's Temparement Forums, Subs: 58 to 65
 - 66 -> NF's Temparement Forum, Subs: 67 to 74
-- 87 -> Health and Fitness
-- 98 -> Advice Center
 - 110 -> Blog
+
 - TOTAL ROWS BEF: 7057039
+- TOTAL ROWS AFT:
 
 \*\*COOKIE HAS 16 HOUR REFRESH RATE, take cookie from unloggedin browser pscafe page
