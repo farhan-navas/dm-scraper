@@ -1,9 +1,12 @@
 import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 import psycopg2
 from psycopg2 import sql
 
+load_dotenv()
+DB_STR = os.getenv("DATABASE_URL")
 DATA_DIR = Path("data").resolve()
 DDL = {
     "users": """
@@ -68,7 +71,6 @@ DDL = {
 
 TABLE_PREFIXES = ["users", "threads", "posts", "interactions"]
 
-
 def _csv_files_for(prefix: str) -> list[Path]:
     """Return CSVs matching prefix-*.csv or fallback to prefix.csv."""
     matches = sorted(DATA_DIR.glob(f"{prefix}-*.csv"))
@@ -81,9 +83,7 @@ def _csv_files_for(prefix: str) -> list[Path]:
     return matches
 
 def main() -> None:
-    db_str = os.environ["DATABASE_URL"]
-    
-    with psycopg2.connect(db_str) as conn:
+    with psycopg2.connect(DB_STR) as conn:
         with conn.cursor() as cur:
             for ddl in DDL.values():
                 cur.execute(ddl)

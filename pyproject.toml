@@ -7,5 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.14.2",
     "psycopg2-binary>=2.9.11",
+    "python-dotenv>=1.2.1",
     "requests>=2.32.5",
 ]
