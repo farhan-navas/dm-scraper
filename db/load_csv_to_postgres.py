@@ -1,9 +1,17 @@
 import os
+import logging
 from dotenv import load_dotenv
 from pathlib import Path
 
 import psycopg2
 from psycopg2 import sql
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 DB_STR = os.getenv("DATABASE_URL")
@@ -83,20 +91,34 @@ def _csv_files_for(prefix: str) -> list[Path]:
     return matches
 
 def main() -> None:
-    with psycopg2.connect(DB_STR) as conn:
+    if not DB_STR:
+        raise RuntimeError("DATABASE_URL is not set (load_dotenv() couldn't find it either)")
+
+    logger.info("Connecting to database…")
+    try:
+        conn = psycopg2.connect(DB_STR, connect_timeout=10)
+    except Exception as exc:
+        logger.error("Database connect failed: %s", exc)
+        raise
+
+    logger.info("Connected.")
+    with conn:
         with conn.cursor() as cur:
+            logger.info("Ensuring tables exist…")
             for ddl in DDL.values():
                 cur.execute(ddl)
 
             for table in TABLE_PREFIXES:
                 files = _csv_files_for(table)
 
+                logger.info("Processing table %s with %d file(s)", table, len(files))
                 cur.execute(
                     sql.SQL("TRUNCATE {} RESTART IDENTITY CASCADE").format(
                         sql.Identifier(table)
                     )
                 )
 
+                logger.info("Truncated %s", table)
                 staging = f"tmp_{table}"
                 cur.execute(
                     sql.SQL(
@@ -104,7 +126,9 @@ def main() -> None:
                     ).format(sql.Identifier(staging), sql.Identifier(table))
                 )
 
+                logger.info("Created staging table %s", staging)
                 for path in files:
+                    logger.info("Copying from %s", path.name)
                     with path.open("r", encoding="utf-8") as f:
                         cur.copy_expert(
                             sql.SQL(
@@ -118,7 +142,9 @@ def main() -> None:
                         "INSERT INTO {} SELECT * FROM {} ON CONFLICT DO NOTHING"
                     ).format(sql.Identifier(table), sql.Identifier(staging))
                 )
+                logger.info("Inserted into %s (rowcount=%s)", table, cur.rowcount)
         conn.commit()
+    logger.info("Done!")
 
 if __name__ == "__main__":
     main()
