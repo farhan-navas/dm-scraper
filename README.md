@@ -114,7 +114,7 @@ COM2 (TM):
 - 98 -> Advice Center
 
 - TOTAL ROWS BEF: 8392223
-- TOTAL ROWS AFT:
+- TOTAL ROWS AFT: 12221480
 
 - Also training conv-transformer
 
@@ -132,6 +132,6 @@ COM3 (SMP):
 - 110 -> Blog
 
 - TOTAL ROWS BEF: 7057039
-- TOTAL ROWS AFT:
+- TOTAL ROWS AFT: 10712504
 
 \*\*COOKIE HAS 16 HOUR REFRESH RATE, take cookie from unloggedin browser pscafe page
