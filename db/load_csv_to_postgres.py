@@ -1,11 +1,11 @@
 import os
+import csv
 import logging
 from dotenv import load_dotenv
 from pathlib import Path
 
 import psycopg2
 from psycopg2 import sql
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,10 +130,17 @@ def main() -> None:
                 for path in files:
                     logger.info("Copying from %s", path.name)
                     with path.open("r", encoding="utf-8") as f:
+                        reader = csv.reader(f)
+                        header = next(reader)  # reads: thread_id,thread_url,page_url,post_id,...
+                        f.seek(0)  # rewind so COPY can read the whole file including header
+
                         cur.copy_expert(
                             sql.SQL(
-                                "COPY {} FROM STDIN WITH (FORMAT csv, HEADER true, NULL '')"
-                            ).format(sql.Identifier(staging)),
+                                "COPY {} ({}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '')"
+                            ).format(
+                                sql.Identifier(staging),
+                                sql.SQL(", ").join(sql.Identifier(col) for col in header),
+                            ),
                             f,
                         )
 

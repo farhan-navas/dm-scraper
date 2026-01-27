@@ -15,11 +15,9 @@ from scraper.user_scraper import extract_user_id_from_profile_url
 
 POST_HREF_PATTERN = re.compile(r"/posts/(\d+)/?")
 
-
 def _current_scrape_timestamp() -> str:
     """Generate an ISO8601 timestamp (UTC) for scrape bookkeeping."""
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
+    return datetime.now().isoformat(timespec="seconds") + "Z"
 
 def _post_id_from_href(href: str | None) -> str | None:
     if not href:
@@ -29,11 +27,9 @@ def _post_id_from_href(href: str | None) -> str | None:
         return None
     return f"post-{match.group(1)}"
 
-
 def _activity_url(profile_url: str) -> str:
     base = profile_url.rstrip("/") + "/"
     return urljoin(base, "activity")
-
 
 def _iter_user_rows(users_glob: str) -> Iterator[dict]:
     for path in sorted(Path().glob(users_glob)):
@@ -43,7 +39,6 @@ def _iter_user_rows(users_glob: str) -> Iterator[dict]:
             reader = csv.DictReader(f)
             for row in reader:
                 yield row
-
 
 def _parse_reaction_name(activity_el) -> str | None:
     reaction_span = activity_el.select_one(".reaction")
@@ -61,7 +56,6 @@ def _parse_reaction_name(activity_el) -> str | None:
 
     reaction_id = reaction_span.get("data-reaction-id")
     return reaction_id if reaction_id else None
-
 
 def _parse_activity_item(activity_el, *, source_user_id: str | None, scraped_at: str) -> list[dict]:
     title_el = activity_el.select_one(".contentRow-title")
@@ -98,7 +92,6 @@ def _parse_activity_item(activity_el, *, source_user_id: str | None, scraped_at:
     }
     return [interaction]
 
-
 def parse_activity_html(html: str, *, source_user_id: str | None) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     scraped_at = _current_scrape_timestamp()
@@ -110,11 +103,9 @@ def parse_activity_html(html: str, *, source_user_id: str | None) -> list[dict]:
         )
     return interactions
 
-
 def _ensure_output_path(path: Path) -> None:
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-
 
 def scrape_user_activity(
     *,
