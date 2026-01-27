@@ -79,6 +79,21 @@ DDL = {
 
 TABLE_PREFIXES = ["users", "threads", "posts", "interactions"]
 
+class NullBytesWrapper:
+    """Wrap a binary file handle and replace NULs with spaces for COPY."""
+
+    def __init__(self, f, replace_with: bytes = b" "):
+        self._f = f
+        self._replace_with = replace_with
+
+    def read(self, size: int = -1) -> bytes:
+        b = self._f.read(size)
+        return b.replace(b"\x00", self._replace_with) if b else b
+
+    def readline(self, size: int = -1) -> bytes:
+        b = self._f.readline(size)
+        return b.replace(b"\x00", self._replace_with) if b else b
+
 def _csv_files_for(prefix: str) -> list[Path]:
     """Return CSVs matching prefix-*.csv or fallback to prefix.csv."""
     matches = sorted(DATA_DIR.glob(f"{prefix}-*.csv"))
@@ -129,11 +144,11 @@ def main() -> None:
                 logger.info("Created staging table %s", staging)
                 for path in files:
                     logger.info("Copying from %s", path.name)
-                    with path.open("r", encoding="utf-8") as f:
-                        reader = csv.reader(f)
-                        header = next(reader)  # reads: thread_id,thread_url,page_url,post_id,...
-                        f.seek(0)  # rewind so COPY can read the whole file including header
+                    with path.open("r", encoding="utf-8", newline="") as tf:
+                        reader = csv.reader(tf)
+                        header = next(reader)
 
+                    with path.open("rb") as bf:
                         cur.copy_expert(
                             sql.SQL(
                                 "COPY {} ({}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '')"
@@ -141,7 +156,7 @@ def main() -> None:
                                 sql.Identifier(staging),
                                 sql.SQL(", ").join(sql.Identifier(col) for col in header),
                             ),
-                            f,
+                            NullBytesWrapper(bf),
                         )
 
                 cur.execute(
