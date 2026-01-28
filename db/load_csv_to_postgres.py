@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 import psycopg2
-from psycopg2 import sql
+from psycopg2 import sql, errors
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 DB_STR = os.getenv("DATABASE_URL")
 DATA_DIR = Path("data").resolve()
+LOG_DIR = Path("db_logs")
+LOG_DIR.mkdir(exist_ok=True)
+FK_LOG = LOG_DIR / "key_errors.log"
 DDL = {
     "users": """
         CREATE TABLE IF NOT EXISTS users (
@@ -135,11 +138,29 @@ def main() -> None:
 
                 logger.info("Truncated %s", table)
                 staging = f"tmp_{table}"
-                cur.execute(
-                    sql.SQL(
-                        "CREATE TEMP TABLE {} (LIKE {} INCLUDING DEFAULTS INCLUDING GENERATED)"
-                    ).format(sql.Identifier(staging), sql.Identifier(table))
-                )
+                if table == "interactions":
+                    cur.execute(
+                        sql.SQL(
+                            """
+                            CREATE TEMP TABLE {} (
+                                interaction_id UUID,
+                                replying_post_id TEXT,
+                                target_post_id TEXT,
+                                source_user_id TEXT,
+                                target_user_id TEXT,
+                                thread_id TEXT,
+                                interaction_type TEXT,
+                                scraped_at TEXT
+                            )
+                            """
+                        ).format(sql.Identifier(staging))
+                    )
+                else:
+                    cur.execute(
+                        sql.SQL(
+                            "CREATE TEMP TABLE {} (LIKE {} INCLUDING DEFAULTS INCLUDING GENERATED)"
+                        ).format(sql.Identifier(staging), sql.Identifier(table))
+                    )
 
                 logger.info("Created staging table %s", staging)
                 for path in files:
@@ -159,12 +180,51 @@ def main() -> None:
                             NullBytesWrapper(bf),
                         )
 
-                cur.execute(
-                    sql.SQL(
-                        "INSERT INTO {} SELECT * FROM {} ON CONFLICT DO NOTHING"
-                    ).format(sql.Identifier(table), sql.Identifier(staging))
-                )
-                logger.info("Inserted into %s (rowcount=%s)", table, cur.rowcount)
+                if table == "interactions":
+                    # Iterate rows and catch FK violations, logging offending rows
+                    cur.execute(
+                        sql.SQL("SELECT * FROM {}").format(sql.Identifier(staging))
+                    )
+                    rows = cur.fetchall()
+                    inserted = 0
+                    for row in rows:
+                        cur.execute("SAVEPOINT interaction_sp")
+                        try:
+                            cur.execute(
+                                sql.SQL(
+                                    """
+                                    INSERT INTO interactions (
+                                        interaction_id,
+                                        replying_post_id,
+                                        target_post_id,
+                                        source_user_id,
+                                        target_user_id,
+                                        thread_id,
+                                        interaction_type,
+                                        scraped_at
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                    ON CONFLICT DO NOTHING
+                                    """
+                                ),
+                                row,
+                            )
+                        except errors.ForeignKeyViolation as exc:
+                            with FK_LOG.open("a", encoding="utf-8", newline="") as lf:
+                                writer = csv.writer(lf)
+                                writer.writerow([*row, str(exc).strip()])
+                            cur.execute("ROLLBACK TO SAVEPOINT interaction_sp")
+                        else:
+                            cur.execute("RELEASE SAVEPOINT interaction_sp")
+                            inserted += cur.rowcount
+                    logger.info("Inserted into %s (rowcount=%s)", table, inserted)
+                else:
+                    cur.execute(
+                        sql.SQL(
+                            "INSERT INTO {} SELECT * FROM {} ON CONFLICT DO NOTHING"
+                        ).format(sql.Identifier(table), sql.Identifier(staging))
+                    )
+                    logger.info("Inserted into %s (rowcount=%s)", table, cur.rowcount)
         conn.commit()
     logger.info("Done!")
 
