@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 import psycopg2
-from psycopg2 import sql, errors
+from psycopg2 import sql
 
 logging.basicConfig(
     level=logging.INFO,
@@ -181,43 +181,76 @@ def main() -> None:
                         )
 
                 if table == "interactions":
-                    # Iterate rows and catch FK violations, logging offending rows
+                    # Insert only rows whose FK targets exist to avoid per-row savepoints
                     cur.execute(
-                        sql.SQL("SELECT * FROM {}").format(sql.Identifier(staging))
+                        sql.SQL(
+                        """
+                        INSERT INTO interactions (
+                            interaction_id,
+                            replying_post_id,
+                            target_post_id,
+                            source_user_id,
+                            target_user_id,
+                            thread_id,
+                            interaction_type,
+                            scraped_at
+                        )
+                        SELECT ti.interaction_id,
+                               ti.replying_post_id,
+                               ti.target_post_id,
+                               ti.source_user_id::bigint,
+                               ti.target_user_id::bigint,
+                               ti.thread_id::bigint,
+                               ti.interaction_type,
+                               ti.scraped_at::timestamptz
+                        FROM {} AS ti 
+                        JOIN posts rp   ON rp.post_id = ti.replying_post_id
+                        JOIN posts tp   ON tp.post_id = ti.target_post_id
+                        JOIN users su   ON su.user_id = ti.source_user_id::bigint
+                        JOIN users tu   ON tu.user_id = ti.target_user_id::bigint
+                        JOIN threads th ON th.thread_id = ti.thread_id::bigint
+                        ON CONFLICT DO NOTHING
+                        """
+                        ).format(sql.Identifier(staging))
                     )
-                    rows = cur.fetchall()
-                    inserted = 0
-                    for row in rows:
-                        cur.execute("SAVEPOINT interaction_sp")
-                        try:
-                            cur.execute(
-                                sql.SQL(
-                                    """
-                                    INSERT INTO interactions (
-                                        interaction_id,
-                                        replying_post_id,
-                                        target_post_id,
-                                        source_user_id,
-                                        target_user_id,
-                                        thread_id,
-                                        interaction_type,
-                                        scraped_at
-                                    )
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                    ON CONFLICT DO NOTHING
-                                    """
-                                ),
-                                row,
-                            )
-                        except errors.ForeignKeyViolation as exc:
-                            with FK_LOG.open("a", encoding="utf-8", newline="") as lf:
-                                writer = csv.writer(lf)
-                                writer.writerow([*row, str(exc).strip()])
-                            cur.execute("ROLLBACK TO SAVEPOINT interaction_sp")
-                        else:
-                            cur.execute("RELEASE SAVEPOINT interaction_sp")
-                            inserted += cur.rowcount
-                    logger.info("Inserted into %s (rowcount=%s)", table, inserted)
+                    logger.info("Inserted into %s (rowcount=%s)", table, cur.rowcount)
+
+                    # Log rows that failed the FK joins for debugging
+                    cur.execute(
+                        sql.SQL(
+                        """
+                        SELECT ti.*,
+                               CASE
+                                   WHEN rp.post_id IS NULL THEN 'missing replying_post_id'
+                                   WHEN tp.post_id IS NULL THEN 'missing target_post_id'
+                                   WHEN su.user_id IS NULL THEN 'missing source_user_id'
+                                   WHEN tu.user_id IS NULL THEN 'missing target_user_id'
+                                   WHEN th.thread_id IS NULL THEN 'missing thread_id'
+                               END AS fk_issue
+                        FROM {} AS ti
+                        LEFT JOIN posts rp   ON rp.post_id = ti.replying_post_id
+                        LEFT JOIN posts tp   ON tp.post_id = ti.target_post_id
+                        LEFT JOIN users su   ON su.user_id = ti.source_user_id::bigint
+                        LEFT JOIN users tu   ON tu.user_id = ti.target_user_id::bigint
+                        LEFT JOIN threads th ON th.thread_id = ti.thread_id::bigint
+                        WHERE rp.post_id IS NULL
+                           OR tp.post_id IS NULL
+                           OR su.user_id IS NULL
+                           OR tu.user_id IS NULL
+                           OR th.thread_id IS NULL
+                        """
+                                ).format(sql.Identifier(staging))
+                    )
+                    fk_failures = cur.fetchall()
+                    if fk_failures:
+                        with FK_LOG.open("a", encoding="utf-8", newline="") as lf:
+                            writer = csv.writer(lf)
+                            writer.writerows(fk_failures)
+                        logger.warning(
+                            "Skipped %d interaction rows due to FK issues (see %s)",
+                            len(fk_failures),
+                            FK_LOG,
+                        )
                 else:
                     cur.execute(
                         sql.SQL(
