@@ -205,12 +205,12 @@ def _parse_post_id_from_quote_link(link) -> str | None:
     if selector:
         match = re.search(r"post-(\d+)", selector)
         if match:
-            return match.group(1)
+            return "post-" + match.group(1)
     href = link.get("href")
     if href:
-        match = re.search(r"(?:id=|post-)(\d+)", href)
+        match = re.search(r"post-(\d+)", href)
         if match:
-            return match.group(1)
+            return "post-" + match.group(1)
     return None
 
 def _clean_quote_username(raw: str | None) -> str | None:

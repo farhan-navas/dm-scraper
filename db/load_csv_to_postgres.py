@@ -197,7 +197,10 @@ def main() -> None:
                         )
                         SELECT ti.interaction_id,
                                ti.replying_post_id,
-                               ti.target_post_id,
+                               CASE WHEN ti.target_post_id ~ '^\d+$'
+                                    THEN 'post-' || ti.target_post_id
+                                    ELSE ti.target_post_id
+                               END AS target_post_id,
                                ti.source_user_id::bigint,
                                ti.target_user_id::bigint,
                                ti.thread_id::bigint,
@@ -229,7 +232,10 @@ def main() -> None:
                                END AS fk_issue
                         FROM {} AS ti
                         LEFT JOIN posts rp   ON rp.post_id = ti.replying_post_id
-                        LEFT JOIN posts tp   ON tp.post_id = ti.target_post_id
+                        LEFT JOIN posts tp   ON tp.post_id = CASE WHEN ti.target_post_id ~ '^\d+$'
+                                                                   THEN 'post-' || ti.target_post_id
+                                                                   ELSE ti.target_post_id
+                                                              END
                         LEFT JOIN users su   ON su.user_id = ti.source_user_id::bigint
                         LEFT JOIN users tu   ON tu.user_id = ti.target_user_id::bigint
                         LEFT JOIN threads th ON th.thread_id = ti.thread_id::bigint
