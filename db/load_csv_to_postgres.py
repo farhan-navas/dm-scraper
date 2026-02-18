@@ -208,7 +208,10 @@ def main() -> None:
                                ti.scraped_at::timestamptz
                         FROM {} AS ti 
                         JOIN posts rp   ON rp.post_id = ti.replying_post_id
-                        JOIN posts tp   ON tp.post_id = ti.target_post_id
+                        JOIN posts tp   ON tp.post_id = CASE WHEN ti.target_post_id ~ '^\d+$'
+                                                                   THEN 'post-' || ti.target_post_id
+                                                                   ELSE ti.target_post_id
+                                                              END
                         JOIN users su   ON su.user_id = ti.source_user_id::bigint
                         JOIN users tu   ON tu.user_id = ti.target_user_id::bigint
                         JOIN threads th ON th.thread_id = ti.thread_id::bigint
