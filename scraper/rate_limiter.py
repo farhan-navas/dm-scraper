@@ -26,6 +26,29 @@ class RateLimiter:
                 time.sleep(sleep_for)
         self.calls.append(time.time())
 
+class BlockedResponseError(RuntimeError):
+    """Raised when the server returns 200 but the body indicates a login wall, CAPTCHA, or permission block."""
+
+_BLOCK_SIGNALS = [
+    "you must be logged in",
+    "you must be registered",
+    "you do not have permission",
+    "please log in",
+    "cf-browser-verification",
+    "just a moment...",           # Cloudflare challenge
+    "checking your browser",     # Cloudflare challenge
+]
+
+def _check_for_blocked_response(text: str, url: str) -> None:
+    """Raise BlockedResponseError if the response body looks like a block page."""
+    lower = text[:4000].lower()  # only scan the head of the document
+    for signal in _BLOCK_SIGNALS:
+        if signal in lower:
+            raise BlockedResponseError(
+                f"[fetch] Response from {url} looks blocked (matched: {signal!r}). "
+                "Cookie may be expired or the page requires authentication."
+            )
+
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Farhan-ResearchBot/0.1 (+https://github.com/farhan-navas; contact: farhanmnavas@gmail.com)",
@@ -47,13 +70,20 @@ def _get_limiter() -> RateLimiter:
     assert _limiter is not None
     return _limiter
 
-def fetch(url: str, max_retries: int = 3, cookies=None) -> str:
+def fetch(url: str, max_retries: int = 3, max_429_retries: int = 5, cookies=None) -> str:
     """
     Rate-limited GET with basic retry + 429/5xx backoff.
     Returns HTML text or raises the last exception.
-    Can pass in cookie if necessary
+    Can pass in cookie if necessary.
+
+    429 responses are retried separately (up to `max_429_retries` times)
+    without consuming the normal retry budget.
     """
-    for attempt in range(1, max_retries + 1):
+    attempt = 0
+    consecutive_429s = 0
+
+    while attempt < max_retries:
+        attempt += 1
         _get_limiter().wait()
         try:
             resp = SESSION.get(url, timeout=15, cookies=cookies)
@@ -64,16 +94,24 @@ def fetch(url: str, max_retries: int = 3, cookies=None) -> str:
             time.sleep(5 * attempt)
             continue
 
-        # Respect 429 (Too Many Requests)
+        # Respect 429 (Too Many Requests) — does not consume a retry attempt
         if resp.status_code == 429:
+            consecutive_429s += 1
+            if consecutive_429s > max_429_retries:
+                raise RuntimeError(
+                    f"[fetch] Hit 429 on {url} {consecutive_429s} times in a row, giving up."
+                )
             retry_after = resp.headers.get("Retry-After")
             if retry_after and retry_after.isdigit():
                 delay = int(retry_after)
             else:
                 delay = 60  # fallback
-            print(f"[fetch] 429 on {url}, sleeping {delay}s then retrying...")
+            print(f"[fetch] 429 on {url}, sleeping {delay}s then retrying (429 #{consecutive_429s})...")
             time.sleep(delay)
+            attempt -= 1  # don't consume a retry
             continue
+
+        consecutive_429s = 0
 
         # Handle 5xx with backoff
         if 500 <= resp.status_code < 600:
@@ -84,6 +122,7 @@ def fetch(url: str, max_retries: int = 3, cookies=None) -> str:
             continue
 
         resp.raise_for_status()
+        _check_for_blocked_response(resp.text, url)
         return resp.text
 
     raise RuntimeError(f"Failed to fetch {url} after {max_retries} attempts.")

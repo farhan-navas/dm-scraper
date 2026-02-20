@@ -352,7 +352,11 @@ def get_thread_list(
         html = fetch(page_url)
         soup = BeautifulSoup(html, "html.parser")
 
-        for card in soup.select(THREAD_CARD_SELECTOR):
+        cards = soup.select(THREAD_CARD_SELECTOR)
+        if not cards:
+            print(f"[threads] WARNING: Page {page} returned 0 thread cards — response may not contain expected content")
+
+        for card in cards:
             link = card.select_one(THREAD_LINK_SELECTOR)
             if not link:
                 continue
@@ -604,6 +608,9 @@ def scrape_thread(
         soup = BeautifulSoup(html, "html.parser")
         _inject_nested_replies(soup, page_url)
         page_posts = parse_posts_from_page(soup)
+
+        if not page_posts:
+            print(f"[scrape-thread] WARNING: Page {page_url} returned 0 posts — response may not contain expected content")
 
         for p in page_posts:
             profile_url = p.get("profile_url")
