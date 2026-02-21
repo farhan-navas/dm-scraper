@@ -18,7 +18,7 @@ LOAD_MORE_POSTS_PATH = "/threads/load-more-posts/"
 
 # Thread index selectors
 THREAD_CARD_SELECTOR = "div.structItem--thread"
-THREAD_LINK_SELECTOR = "h3.structItem-title a"
+THREAD_LINK_SELECTOR = 'h3.structItem-title a[href*="/threads/"]'
 NEXT_PAGE_SELECTOR = "a.pageNav-jump--next"
 
 # Post selectors
@@ -173,12 +173,12 @@ def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
                         if new_total:
                             label["total-reply-count"] = new_total
                         else:
-                            label.attrs.pop("total-reply-count")
-                    
+                            label.attrs.pop("total-reply-count", None)
+
                         if new_exact_count_bool:
                             label["exact-reply-count-unknown"] = new_exact_count_bool
                         else:
-                            label.attrs.pop("exact-reply-count-unknown")
+                            label.attrs.pop("exact-reply-count-unknown", None)
 
                 if newly_appended == 0:
                     break

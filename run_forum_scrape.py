@@ -1,8 +1,11 @@
 import argparse
 import csv
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse
+
+from dotenv import load_dotenv
 
 from scraper.data_model import (
     INTERACTIONS_FIELDNAMES,
@@ -10,9 +13,17 @@ from scraper.data_model import (
     THREADS_FIELDNAMES,
     USERS_FIELDNAMES,
 )
-from scraper.post_scraper import absolute_url, get_thread_list, scrape_thread
+from scraper.post_scraper import (
+    absolute_url,
+    get_thread_list,
+    scrape_thread,
+    _thread_id_from_url,
+)
+
+load_dotenv()
 
 FORUMS_CSV_PATH = Path("forums.csv")
+
 
 def _slug_from_url(url: str) -> str:
     path = urlparse(url).path.strip("/")
@@ -21,6 +32,7 @@ def _slug_from_url(url: str) -> str:
     tail = path.split("/")[-1]
     cleaned = re.sub(r"\.\d+$", "", tail)
     return cleaned or "forums"
+
 
 def load_forums(csv_path: Path) -> list[dict[str, str]]:
     if not csv_path.exists():
@@ -37,6 +49,60 @@ def load_forums(csv_path: Path) -> list[dict[str, str]]:
             forums.append({"forum_name": name, "forum_href": absolute_url(str(href))})
     return forums
 
+
+def _open_csv_append(path: str, fieldnames: list[str]):
+    """Open a CSV for appending. Writes header only if the file is new/empty."""
+    p = Path(path)
+    write_header = not p.exists() or p.stat().st_size == 0
+    f = open(p, "a", newline="", encoding="utf-8")
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    if write_header:
+        writer.writeheader()
+    return f, writer
+
+
+def _write_thread_to_db(db_writer, *, user_cache, written_user_ids, posts, interactions, thread_row):
+    """Insert one thread's data into Postgres in FK-safe order."""
+    # 1. Users first (posts.user_id FK → users)
+    for user_id, user in user_cache.items():
+        if not user_id or user_id in written_user_ids:
+            continue
+        db_writer.insert_user(user)
+        written_user_ids.add(user_id)
+
+    # 2. Thread (posts.thread_id FK → threads)
+    db_writer.insert_thread(thread_row)
+
+    # 3. Posts (interactions FK → posts)
+    for row in posts:
+        db_writer.insert_post(row)
+
+    # 4. Interactions last
+    for interaction in interactions:
+        db_writer.insert_interaction(interaction)
+
+    # Commit per thread — safe resume point
+    db_writer.commit()
+
+
+def _write_thread_to_csv(*, user_cache, written_user_ids, posts, interactions, thread_row,
+                          posts_writer, interactions_writer, threads_writer, users_writer):
+    """Write one thread's data to CSV files."""
+    for row in posts:
+        posts_writer.writerow(row)
+
+    for interaction in interactions:
+        interactions_writer.writerow(interaction)
+
+    threads_writer.writerow(thread_row)
+
+    for user_id, user in user_cache.items():
+        if not user_id or user_id in written_user_ids:
+            continue
+        users_writer.writerow(user)
+        written_user_ids.add(user_id)
+
+
 def scrape_single_forum(
     *,
     forum_name: str,
@@ -44,14 +110,23 @@ def scrape_single_forum(
     max_forum_pages: int | None,
     thread_limit: int | None,
     thread_page_limit: int | None,
+    skip_scraped: bool = True,
+    db_writer=None,
+    csv_mode: bool = False,
 ):
     slug = _slug_from_url(forum_url)
-    threads_csv_path = f"data/threads-{slug}.csv"
-    posts_csv_path = f"data/posts-{slug}.csv"
-    users_csv_path = f"data/users-{slug}.csv"
-    interactions_csv_path = f"data/interactions-{slug}.csv"
 
     print(f"[main] Scraping forum '{forum_name}' ({forum_url})")
+
+    # Load already-scraped thread IDs from DB
+    scraped_ids: set[str] = set()
+    if skip_scraped and db_writer:
+        try:
+            scraped_ids = db_writer.get_scraped_thread_ids()
+            if scraped_ids:
+                print(f"[main] Found {len(scraped_ids)} already-scraped threads in DB")
+        except Exception as exc:
+            print(f"[main] Could not load scraped thread IDs: {exc}")
 
     thread_urls = get_thread_list(
         forum_url,
@@ -60,27 +135,38 @@ def scrape_single_forum(
     )
     print(f"[main] Fetched {len(thread_urls)} thread URLs for {forum_name}")
 
+    # Filter out threads we've already scraped
+    if scraped_ids:
+        new_urls = [u for u in thread_urls if _thread_id_from_url(u) not in scraped_ids]
+        skipped = len(thread_urls) - len(new_urls)
+        if skipped:
+            print(f"[main] Skipping {skipped} already-scraped threads, {len(new_urls)} new to scrape")
+        thread_urls = new_urls
+
+    if not thread_urls:
+        print("[main] No new threads to scrape — done.")
+        return
+
     user_cache: dict[str, dict] = {}
     written_user_ids: set[str] = set()
 
-    with (
-        open(posts_csv_path, "w", newline="", encoding="utf-8") as posts_f,
-        open(interactions_csv_path, "w", newline="", encoding="utf-8") as interactions_f,
-        open(threads_csv_path, "w", newline="", encoding="utf-8") as threads_f,
-        open(users_csv_path, "w", newline="", encoding="utf-8") as users_f,
-    ):
-        posts_writer = csv.DictWriter(posts_f, fieldnames=POSTS_FIELDNAMES)
-        posts_writer.writeheader()
+    # CSV file handles (only opened in csv mode)
+    csv_handles = []
+    posts_writer = interactions_writer = threads_writer = users_writer = None
 
-        interactions_writer = csv.DictWriter(interactions_f, fieldnames=INTERACTIONS_FIELDNAMES)
-        interactions_writer.writeheader()
+    if csv_mode:
+        threads_csv_path = f"data/threads-{slug}.csv"
+        posts_csv_path = f"data/posts-{slug}.csv"
+        users_csv_path = f"data/users-{slug}.csv"
+        interactions_csv_path = f"data/interactions-{slug}.csv"
 
-        threads_writer = csv.DictWriter(threads_f, fieldnames=THREADS_FIELDNAMES)
-        threads_writer.writeheader()
+        posts_f, posts_writer = _open_csv_append(posts_csv_path, POSTS_FIELDNAMES)
+        interactions_f, interactions_writer = _open_csv_append(interactions_csv_path, INTERACTIONS_FIELDNAMES)
+        threads_f, threads_writer = _open_csv_append(threads_csv_path, THREADS_FIELDNAMES)
+        users_f, users_writer = _open_csv_append(users_csv_path, USERS_FIELDNAMES)
+        csv_handles = [posts_f, interactions_f, threads_f, users_f]
 
-        users_writer = csv.DictWriter(users_f, fieldnames=USERS_FIELDNAMES)
-        users_writer.writeheader()
-
+    try:
         for i, t_url in enumerate(thread_urls, start=1):
             print(f"[main] ({i}/{len(thread_urls)}) Scraping thread: {t_url}")
             try:
@@ -90,29 +176,37 @@ def scrape_single_forum(
                     max_pages=thread_page_limit,
                     forum_url=forum_url,
                 )
-            except Exception as exc:  # continue on thread failure
+            except Exception as exc:
                 print(f"[main] Error scraping {t_url}: {exc}")
                 continue
 
-            for row in posts:
-                posts_writer.writerow(row)
+            if csv_mode:
+                _write_thread_to_csv(
+                    user_cache=user_cache,
+                    written_user_ids=written_user_ids,
+                    posts=posts,
+                    interactions=interactions,
+                    thread_row=thread_row,
+                    posts_writer=posts_writer,
+                    interactions_writer=interactions_writer,
+                    threads_writer=threads_writer,
+                    users_writer=users_writer,
+                )
+            else:
+                _write_thread_to_db(
+                    db_writer,
+                    user_cache=user_cache,
+                    written_user_ids=written_user_ids,
+                    posts=posts,
+                    interactions=interactions,
+                    thread_row=thread_row,
+                )
+    finally:
+        for fh in csv_handles:
+            fh.close()
 
-            for interaction in interactions:
-                interactions_writer.writerow(interaction)
+    print(f"[main] Finished forum '{forum_name}'.")
 
-            threads_writer.writerow(thread_row)
-
-            for user_id, user in user_cache.items():
-                if not user_id or user_id in written_user_ids:
-                    continue
-                users_writer.writerow(user)
-                written_user_ids.add(user_id)
-
-    print(
-        "[main] Finished forum '{0}'. Outputs: {1}, {2}, {3}, {4}".format(
-            forum_name, posts_csv_path, users_csv_path, interactions_csv_path, threads_csv_path
-        )
-    )
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scrape a single forum by index from forums.csv")
@@ -122,7 +216,18 @@ def _parse_args() -> argparse.Namespace:
         default=0,
         help="Zero-based index inside forums.csv to scrape",
     )
+    parser.add_argument(
+        "--no-skip",
+        action="store_true",
+        help="Scrape all threads even if they already exist in the DB",
+    )
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Write to CSV files instead of Postgres (debug mode)",
+    )
     return parser.parse_args()
+
 
 def main() -> None:
     args = _parse_args()
@@ -141,13 +246,29 @@ def main() -> None:
         f"scraping index {args.forum_index}: {forum['forum_name']}"
     )
 
-    scrape_single_forum(
-        forum_name=forum["forum_name"],
-        forum_url=forum["forum_href"],
-        max_forum_pages=None,
-        thread_limit=None,
-        thread_page_limit=None,
-    )
+    db_writer = None
+    if not args.csv:
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            raise RuntimeError("DATABASE_URL not set. Use --csv for CSV-only mode.")
+        from db.writer import DbWriter
+        db_writer = DbWriter(db_url)
+
+    try:
+        scrape_single_forum(
+            forum_name=forum["forum_name"],
+            forum_url=forum["forum_href"],
+            max_forum_pages=None,
+            thread_limit=None,
+            thread_page_limit=None,
+            skip_scraped=not args.no_skip,
+            db_writer=db_writer,
+            csv_mode=args.csv,
+        )
+    finally:
+        if db_writer:
+            db_writer.close()
+
 
 if __name__ == "__main__":
     main()
