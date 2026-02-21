@@ -397,19 +397,25 @@ def get_thread_list(
 def _extract_post_id(post_div) -> str | None:
     """
     Try to extract a stable post_id from attributes.
-    Common patterns: data-content, id="js-post-123", id="post-123", etc.
+    Common patterns: data-content="post-123", id="js-post-123", id="post-123", etc.
+    Always returns the normalised "post-<digits>" format.
     """
-    # 1) data-content
+    # 1) data-content (usually already "post-123")
     pid = post_div.get("data-content")
     if pid:
-        return str(pid)
+        pid = str(pid)
+        if not pid.startswith("post-"):
+            m = re.search(r"(\d+)", pid)
+            if m:
+                return f"post-{m.group(1)}"
+        return pid
 
-    # 2) id with digits
+    # 2) id with digits — normalise to "post-<digits>"
     elem_id = post_div.get("id")
     if elem_id:
         m = re.search(r"(\d+)$", elem_id)
         if m:
-            return m.group(1)
+            return f"post-{m.group(1)}"
 
     return None
 
