@@ -1,8 +1,22 @@
+import os
+import random
 import time
 import requests
 
 from collections import deque
 from typing import Optional
+
+from dotenv import load_dotenv
+load_dotenv()
+
+# Pool of current Chrome UAs — one is picked randomly per session.
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+]
 
 class RateLimiter:
     """
@@ -51,8 +65,18 @@ def _check_for_blocked_response(text: str, url: str) -> None:
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "Farhan-ResearchBot/0.1 (+https://github.com/farhan-navas; contact: farhanmnavas@gmail.com)",
+    "User-Agent": random.choice(_USER_AGENTS),
 })
+
+# Load auth cookies from environment if available.
+# XF_USER is the persistent login cookie (lasts 30 days).
+# CDNCSRF is the CDN-level CSRF token.
+_xf_user = os.environ.get("XF_USER")
+_cdncsrf = os.environ.get("CDNCSRF")
+if _xf_user:
+    SESSION.cookies.set("xf_user", _xf_user, domain=".personalitycafe.com")
+if _cdncsrf:
+    SESSION.cookies.set("cdncsrf", _cdncsrf, domain=".personalitycafe.com")
 
 DEFAULT_MAX_CALLS = 1
 DEFAULT_PERIOD = 2.0

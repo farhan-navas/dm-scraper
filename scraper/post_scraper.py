@@ -298,10 +298,8 @@ def _extract_reaction_bar(post_div) -> dict | None:
     }
 
 def _parse_reaction_overlay(url: str) -> list[dict]:
-    cookie_val = os.environ.get("CDNCSRF")
-    cookies = {"cdncsrf": cookie_val}
     try:
-        html = fetch(url, cookies=cookies)
+        html = fetch(url)
     except Exception as exc:
         print(f"[reactions] Failed to fetch overlay {url}: {exc}")
         return []
