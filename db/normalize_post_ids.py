@@ -13,7 +13,10 @@ Usage:
 import argparse
 import csv
 import re
+import sys
 import tempfile
+
+csv.field_size_limit(sys.maxsize)
 import shutil
 from pathlib import Path
 
