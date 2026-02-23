@@ -497,22 +497,6 @@ def _build_interactions_for_post(
     scraped_at = post_row.get("scraped_at")
 
     reaction_entries: list[dict] = []
-    if reactions:
-        overlay_url = reactions.get("overlay_url")
-        if overlay_url:
-            reaction_entries = _parse_reaction_overlay(overlay_url)
-        if not reaction_entries:
-            reaction_types = reactions.get("reaction_types") or []
-            fallback = reaction_types[0] if reaction_types else {}
-            fallback_reaction = _normalize_reaction_name(fallback.get("reaction"))
-            for name in reactions.get("preview_names", []):
-                reaction_entries.append({
-                    "reaction_id": fallback.get("reaction_id"),
-                    "reaction": fallback_reaction,
-                    "username": name,
-                    "profile_url": None,
-                    "user_id": None,
-                })
 
     for reaction in reaction_entries:
         if not reaction.get("user_id") and not reaction.get("username"):
