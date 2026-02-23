@@ -150,6 +150,18 @@ def scrape_single_forum(
     user_cache: dict[str, dict] = {}
     written_user_ids: set[str] = set()
 
+    # Pre-populate caches with users already in DB to avoid re-fetching profiles
+    if db_writer:
+        try:
+            existing_user_ids = db_writer.get_scraped_user_ids()
+            if existing_user_ids:
+                for uid in existing_user_ids:
+                    user_cache[uid] = {"user_id": uid}
+                written_user_ids = set(existing_user_ids)
+                print(f"[main] Loaded {len(existing_user_ids)} existing users from DB — will skip profile fetches")
+        except Exception as exc:
+            print(f"[main] Could not load existing user IDs: {exc}")
+
     # CSV file handles (only opened in csv mode)
     csv_handles = []
     posts_writer = interactions_writer = threads_writer = users_writer = None

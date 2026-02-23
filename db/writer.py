@@ -167,6 +167,11 @@ class DbWriter:
             cur.execute("SELECT thread_id FROM threads")
             return {str(row[0]) for row in cur.fetchall()}
 
+    def get_scraped_user_ids(self) -> set[str]:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users")
+            return {str(row[0]) for row in cur.fetchall()}
+
     # ------------------------------------------------------------------
     # Inserts
     # ------------------------------------------------------------------
