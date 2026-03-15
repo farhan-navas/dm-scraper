@@ -5,7 +5,9 @@ Interactions use savepoints to gracefully handle FK violations (e.g.
 target posts/users from unscraped threads).
 """
 
+import csv
 import logging
+from pathlib import Path
 
 import psycopg2
 import psycopg2.errors
@@ -150,6 +152,7 @@ class DbWriter:
         self.conn = psycopg2.connect(db_url, connect_timeout=10)
         self._ensure_tables()
         self._fk_failures = 0
+        self._failed_interactions: list[dict] = []
         logger.info("DbWriter ready.")
 
     def _ensure_tables(self) -> None:
@@ -204,9 +207,10 @@ class DbWriter:
             try:
                 cur.execute(_INSERT_INTERACTION, vals)
                 cur.execute("RELEASE SAVEPOINT interaction_sp")
-            except psycopg2.errors.ForeignKeyViolation:
+            except psycopg2.errors.ForeignKeyViolation as exc:
                 cur.execute("ROLLBACK TO SAVEPOINT interaction_sp")
                 self._fk_failures += 1
+                self._failed_interactions.append(interaction)
 
     # ------------------------------------------------------------------
     # Transaction helpers
@@ -214,6 +218,51 @@ class DbWriter:
 
     def commit(self) -> None:
         self.conn.commit()
+
+    def retry_failed_interactions(self, forum_slug: str = "unknown") -> None:
+        """Retry interactions that failed due to FK violations.
+
+        Call this after all forums are scraped — referenced posts/users
+        from other forums may now exist in the DB. Any that still fail
+        are saved to db_logs/failed_interactions-<forum_slug>.csv for
+        future retries.
+        """
+        if not self._failed_interactions:
+            return
+
+        total = len(self._failed_interactions)
+        logger.info("Retrying %d failed interaction(s)…", total)
+
+        still_failing: list[dict] = []
+        with self.conn.cursor() as cur:
+            for interaction in self._failed_interactions:
+                vals = _row_values(interaction, INTERACTIONS_FIELDNAMES)
+                cur.execute("SAVEPOINT retry_sp")
+                try:
+                    cur.execute(_INSERT_INTERACTION, vals)
+                    cur.execute("RELEASE SAVEPOINT retry_sp")
+                except psycopg2.errors.ForeignKeyViolation:
+                    cur.execute("ROLLBACK TO SAVEPOINT retry_sp")
+                    still_failing.append(interaction)
+
+        self.conn.commit()
+        recovered = total - len(still_failing)
+        logger.info(
+            "Retry complete: %d recovered, %d still failing", recovered, len(still_failing)
+        )
+
+        if still_failing:
+            log_dir = Path("db_logs")
+            log_dir.mkdir(exist_ok=True)
+            csv_path = log_dir / f"failed_interactions-{forum_slug}.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=INTERACTIONS_FIELDNAMES)
+                writer.writeheader()
+                writer.writerows(still_failing)
+            logger.info("Saved %d failed interactions to %s", len(still_failing), csv_path)
+
+        self._failed_interactions.clear()
+        self._fk_failures = len(still_failing)
 
     def close(self) -> None:
         if self._fk_failures:

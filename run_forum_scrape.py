@@ -279,6 +279,8 @@ def main() -> None:
         )
     finally:
         if db_writer:
+            forum_slug = _slug_from_url(forum["forum_href"])
+            db_writer.retry_failed_interactions(forum_slug)
             db_writer.close()
 
 
