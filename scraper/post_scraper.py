@@ -2,6 +2,7 @@ import os
 import hashlib
 import json
 import re
+import time
 from datetime import datetime
 from urllib.parse import urlparse, urlencode
 from uuid import uuid4
@@ -114,12 +115,23 @@ def _load_nested_replies_for_label(label, posts_loaded: int, request_uri: str) -
 
     url = BASE_URL + LOAD_MORE_POSTS_PATH + "?" + urlencode(params, doseq=True)
 
-    try:
-        resp_text = fetch(url)
-        data = json.loads(resp_text)
-    except Exception as exc:
-        print(f"[nested] Failed to load replies for parent {parent_post_id}: {exc}")
-        return []
+    max_retries = 3
+    data = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp_text = fetch(url)
+            data = json.loads(resp_text)
+            break
+        except Exception as exc:
+            if attempt < max_retries:
+                delay = 5 * attempt
+                print(f"[nested] Failed to load replies for parent {parent_post_id} "
+                      f"(attempt {attempt}/{max_retries}): {exc} — retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                print(f"[nested] Failed to load replies for parent {parent_post_id} "
+                      f"after {max_retries} attempts: {exc}")
+                return []
 
     # XenForo returns {'html': {'content': '<div>...</div>'}}
     html_fragments: list[str] = []
