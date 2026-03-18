@@ -24,6 +24,7 @@ def main() -> None:
                 UNION ALL SELECT 'posts', count(*) FROM posts
                 UNION ALL SELECT 'users', count(*) FROM users
                 UNION ALL SELECT 'interactions', count(*) FROM interactions
+                UNION ALL SELECT 'follows', count(*) FROM follows
                 ORDER BY tbl
             """)
             rows = cur.fetchall()

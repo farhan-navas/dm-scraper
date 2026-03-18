@@ -80,6 +80,14 @@ DDL = {
             scraped_at TIMESTAMPTZ
         );
     """,
+    "follows": """
+        CREATE TABLE IF NOT EXISTS follows (
+            follower_id BIGINT REFERENCES users(user_id),
+            followed_id BIGINT REFERENCES users(user_id),
+            scraped_at TIMESTAMPTZ,
+            PRIMARY KEY (follower_id, followed_id)
+        );
+    """,
 }
 
 # Pre-built SQL for each table

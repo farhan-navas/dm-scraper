@@ -55,7 +55,17 @@ Data is written directly into a Postgres database. Tables are created automatica
 | `showcase_count`      | integer     | Tooltip "Showcase items".                              |
 | `scraped_at`          | timestamptz | When this profile snapshot was saved.                  |
 
-# TODO: add following + follower lists
+### `Follows`
+
+Directed follow edges between users. Only the "following" direction is scraped per user — if user A follows user B, the row is `(follower_id=A, followed_id=B)`.
+
+| column        | type        | notes                                            |
+| ------------- | ----------- | ------------------------------------------------ |
+| `follower_id` | bigint      | FK → `user.user_id`, the person who follows.     |
+| `followed_id` | bigint      | FK → `user.user_id`, the person being followed.  |
+| `scraped_at`  | timestamptz | When this edge was scraped.                      |
+
+Composite primary key: `(follower_id, followed_id)`.
 
 ### `Interaction` (derived)
 
@@ -105,10 +115,12 @@ To get these: log into PersonalityCafe in your browser (check "Stay logged in"),
 ### Utility scripts
 
 ```bash
-uv run db/check_counts.py                   # show row counts per table + DB size
-uv run db/retry_failed_interactions.py       # retry FK-failed interactions from db_logs/
-uv run db/normalize_post_ids.py --apply     # normalize bare-digit post IDs in CSVs
-uv run db/load_csv_to_postgres.py           # bulk load CSVs into Postgres
+uv run scrape_user_follows.py                    # scrape /following for all users in DB
+uv run scrape_user_follows.py --max-users 10     # limit for testing
+uv run db/check_counts.py                        # show row counts per table + DB size
+uv run db/retry_failed_interactions.py            # retry FK-failed interactions from db_logs/
+uv run db/normalize_post_ids.py --apply          # normalize bare-digit post IDs in CSVs
+uv run db/load_csv_to_postgres.py                # bulk load CSVs into Postgres
 ```
 
 More testing scripts in `test/` directory.
