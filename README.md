@@ -1,16 +1,16 @@
 # DM Recommender Scraper
 
-Lightweight Python scraper that collects thread posts and public user metadata from PersonalityCafe without authentication (all public data).
+Lightweight Python scraper that collects thread posts and public user metadata from PersonalityCafe. Writes directly to Postgres by default, with CSV output available as a debug mode.
 
-## Initial DB Schema
+## DB Schema
 
-Even though the pipeline currently writes CSVs, we treat them as normalized tables so that after initial processing, they can be dropped directly into a lightweight Postgres instance later.
+Data is written directly into a Postgres database. Tables are created automatically on first run.
 
 ### `Thread`
 
 | column       | type        | notes                                                               |
 | ------------ | ----------- | ------------------------------------------------------------------- |
-| `thread_id`  | text        | Hash or slug extracted from `thread_url` (e.g., last path segment). |
+| `thread_id`  | bigint      | Numeric ID extracted from the thread URL. Primary key.              |
 | `thread_url` | text        | Canonical PersonalityCafe URL.                                      |
 | `forum_url`  | text        | Parent forum listing used when crawling.                            |
 | `first_seen` | timestamptz | When the scraper first encountered the thread.                      |
@@ -21,10 +21,11 @@ Even though the pipeline currently writes CSVs, we treat them as normalized tabl
 
 | column       | type        | notes                                                                        |
 | ------------ | ----------- | ---------------------------------------------------------------------------- |
-| `post_id`    | text        | XenForo identifier (last digits of `data-content` / `id`). Primary key.      |
-| `thread_id`  | text        | FK → `thread.thread_id`.                                                     |
+| `post_id`    | text        | XenForo identifier, always `post-<digits>` format. Primary key.              |
+| `thread_id`  | bigint      | FK → `thread.thread_id`.                                                     |
+| `thread_url` | text        | Thread URL for convenience.                                                  |
 | `page_url`   | text        | Concrete page that was scraped (thread pagination aware).                    |
-| `user_id`    | text        | FK → `user.user_id`.                                                         |
+| `user_id`    | bigint      | FK → `user.user_id`.                                                         |
 | `username`   | text        | Username displayed on the post (overwritten by tooltip version when cached). |
 | `timestamp`  | timestamptz | Raw value from `<time datetime>`; ISO 8601 string when stored in CSV.        |
 | `text`       | text        | Post body flattened to newline-separated plain text.                         |
@@ -34,29 +35,27 @@ Even though the pipeline currently writes CSVs, we treat them as normalized tabl
 
 | column                | type        | notes                                                  |
 | --------------------- | ----------- | ------------------------------------------------------ |
-| `user_id`             | text        | Stable numeric identifier parsed from the member slug. |
+| `user_id`             | bigint      | Stable numeric identifier parsed from the member slug. |
 | `username`            | text        | Canonical username from tooltip header.                |
 | `profile_url`         | text        | Fully-qualified profile link without `/tooltip`.       |
 | `join_date`           | timestamptz | Tooltip-provided ISO datetime.                         |
-| `role`                | text        | Tooltip “user title” (e.g., Banned, Member).           |
+| `role`                | text        | Tooltip "user title" (e.g., Banned, Member).           |
 | `gender`              | text/null   | Pulled from the `About` tab when present.              |
 | `country_of_birth`    | text/null   | Pulled from the `About` tab when present.              |
-| `location`            | text/null   | “From …” location from the profile header/`About` tab. |
+| `location`            | text/null   | "From …" location from the profile header/`About` tab. |
 | `mbti_type`           | text/null   | Myers-Briggs type string (`About` tab).                |
 | `enneagram_type`      | text/null   | Enneagram string (`About` tab).                        |
 | `socionics`           | text/null   | Socionics designation, when users fill it out.         |
 | `occupation`          | text/null   | Free-form occupation field from the `About` tab.       |
-| `replies`             | integer     | Tooltip “Replies” count.                               |
-| `discussions_created` | integer     | Tooltip “Discussions created” count.                   |
-| `reaction_score`      | integer     | Tooltip “Reaction score”.                              |
-| `points`              | integer     | Tooltip “Points”.                                      |
-| `media_count`         | integer     | Tooltip “Media” uploads.                               |
-| `showcase_count`      | integer     | Tooltip “Showcase items”.                              |
+| `replies`             | integer     | Tooltip "Replies" count.                               |
+| `discussions_created` | integer     | Tooltip "Discussions created" count.                   |
+| `reaction_score`      | integer     | Tooltip "Reaction score".                              |
+| `points`              | integer     | Tooltip "Points".                                      |
+| `media_count`         | integer     | Tooltip "Media" uploads.                               |
+| `showcase_count`      | integer     | Tooltip "Showcase items".                              |
 | `scraped_at`          | timestamptz | When this profile snapshot was saved.                  |
 
 # TODO: add following + follower lists
-
-CSV rows store blanks for `NULL` values so they load cleanly later.
 
 ### `Interaction` (derived)
 
@@ -72,23 +71,47 @@ Schema:
 | `interaction_id`   | uuid        | Synthetic PK                                                                                 |
 | `replying_post_id` | text        | FK → `post.post_id` (the reply), source post id                                              |
 | `target_post_id`   | text        | FK → `post.post_id` (the quoted/mentioned post). Nullable when we only know the target user. |
-| `source_user_id`   | text        | FK → `user.user_id`, the person replying                                                     |
-| `target_user_id`   | text        | FK → `user.user_id`, the person that is being replied to                                     |
-| `thread_id`        | text        | Convenience FK for filtering.                                                                |
-| `interaction_type` | text        | Enum (`quote`, `mention`, `implicit_reply`).                                                 |
+| `source_user_id`   | bigint      | FK → `user.user_id`, the person replying                                                     |
+| `target_user_id`   | bigint      | FK → `user.user_id`, the person that is being replied to                                     |
+| `thread_id`        | bigint      | Convenience FK for filtering.                                                                |
+| `interaction_type` | text        | Enum (`quote`, `mention`, `reply`).                                                          |
 | `scraped_at`       | timestamptz | Timestamp applied when emitting the derived edge.                                            |
 
 ## Running scraper
 
-Orchestrator lives in `scraper/post_scraper.py`. Can be executed directly or via:
+Orchestrator lives in `run_forum_scrape.py`. Default mode writes directly to Postgres (requires `DATABASE_URL` in `.env`).
 
 ```bash
-uv run run_forum_scrape.py
+uv run run_forum_scrape.py --forum-index <N>              # scrape forum N to Postgres, skip already-scraped threads
+uv run run_forum_scrape.py --forum-index <N> --no-skip    # re-scrape all threads in forum N
+uv run run_forum_scrape.py --forum-index <N> --csv        # write to CSV files instead (debug mode)
 ```
 
-More testing scripts included in `test/` directory, to find out return values of each thread/forum/user scrape
+Forum indices correspond to rows in `forums.csv` (0-indexed).
 
-Respect a conservative rate limit (polite scraping! for now, one request every 3s), and emit CSVs in `data/`. Some forums require auth, so I will need to pass in my own auth cookie, or use mechanical soup. Will figure it out.
+Rate limit: 1 request per 2 seconds. Already-scraped threads and users are skipped automatically via DB lookups.
+
+### Authentication
+
+Some forums and user profiles require authentication. The scraper reads auth cookies from `.env`:
+
+```
+XF_USER="<your xf_user cookie>"     # persistent login cookie, lasts 30 days
+CDNCSRF="<your cdncsrf cookie>"     # CDN-level CSRF token
+```
+
+To get these: log into PersonalityCafe in your browser (check "Stay logged in"), then copy the `xf_user` and `cdncsrf` cookie values from DevTools → Application → Cookies.
+
+### Utility scripts
+
+```bash
+uv run db/check_counts.py                   # show row counts per table + DB size
+uv run db/retry_failed_interactions.py       # retry FK-failed interactions from db_logs/
+uv run db/normalize_post_ids.py --apply     # normalize bare-digit post IDs in CSVs
+uv run db/load_csv_to_postgres.py           # bulk load CSVs into Postgres
+```
+
+More testing scripts in `test/` directory.
 
 ## Run Configurations (up till now)
 
@@ -134,4 +157,6 @@ COM3 (SMP):
 - TOTAL ROWS BEF: 7057039
 - TOTAL ROWS AFT: 10712504
 
-\*\*COOKIE HAS 16 HOUR REFRESH RATE, take cookie from unloggedin browser pscafe page
+0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21
+22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40
+41,42,43,44,45,46,47,48,49,50,51,52,53,54,55
