@@ -116,8 +116,8 @@ To get these: log into PersonalityCafe in your browser (check "Stay logged in"),
 ### Utility scripts
 
 ```bash
-uv run scrape_user_follows.py                    # scrape /following for all users in DB
-uv run scrape_user_follows.py --max-users 10     # limit for testing
+uv run scrape_user_graph.py                    # scrape /following for all users in DB
+uv run scrape_user_graph.py --max-users 10     # limit for testing
 uv run db/check_counts.py                        # show row counts per table + DB size
 uv run db/retry_failed_interactions.py            # retry FK-failed interactions from db_logs/
 uv run db/normalize_post_ids.py --apply          # normalize bare-digit post IDs in CSVs

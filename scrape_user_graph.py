@@ -3,14 +3,18 @@ Scrape the /following page and bio for every user in the DB.
 
 - Inserts follow edges into the follows table.
 - Updates the user's bio in the users table (if present on the about page).
+- Discovers new users from follow lists and scrapes their profiles.
+
+Each run expands the graph by one level. Re-run until no new users are
+found to build the complete follow graph.
 
 Skips users whose follows have already been scraped (follower_id exists
 in follows table). Gracefully handles auth-gated profiles (303 redirects).
 
 Usage:
-    uv run scrape_user_follows.py
-    uv run scrape_user_follows.py --max-users 100    # limit for testing
-    uv run scrape_user_follows.py --no-skip           # re-scrape all users
+    uv run scrape_user_graph.py
+    uv run scrape_user_graph.py --max-users 100    # limit for testing
+    uv run scrape_user_graph.py --no-skip           # re-scrape all users
 """
 
 import argparse
@@ -23,8 +27,11 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from scraper.rate_limiter import fetch
+from scraper.user_scraper import fetch_user_profile
 
 load_dotenv()
+
+BASE_URL = "https://www.personalitycafe.com"
 
 FOLLOWS_DDL = """
     CREATE TABLE IF NOT EXISTS follows (
@@ -35,7 +42,6 @@ FOLLOWS_DDL = """
     );
 """
 
-# Add bio column if it doesn't exist
 ADD_BIO_COLUMN = """
     ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
 """
@@ -50,24 +56,39 @@ UPDATE_BIO = """
     UPDATE users SET bio = %s WHERE user_id = %s AND (bio IS NULL OR bio = '')
 """
 
+INSERT_USER = """
+    INSERT INTO users (user_id, username, profile_url, join_date, role,
+        gender, country_of_birth, location, mbti_type, enneagram_type,
+        socionics, occupation, replies, discussions_created, reaction_score,
+        points, media_count, showcase_count, scraped_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (user_id) DO NOTHING
+"""
+
+from scraper.data_model import USERS_FIELDNAMES
+
 
 def _scrape_timestamp() -> str:
     return datetime.now().isoformat(timespec="seconds") + "Z"
 
 
-def _parse_following_page(html: str) -> list[str]:
-    """Extract user IDs from a /following page. Returns list of user_id strings."""
+def _parse_following_page(html: str) -> list[tuple[str, str]]:
+    """Extract (user_id, profile_url) pairs from a /following page."""
     soup = BeautifulSoup(html, "html.parser")
-    user_ids: list[str] = []
+    results: list[tuple[str, str]] = []
     seen: set[str] = set()
 
     for el in soup.select(".block-row a[data-user-id]"):
         uid = el.get("data-user-id")
-        if uid and uid not in seen:
+        href = el.get("href")
+        if uid and uid not in seen and href:
             seen.add(uid)
-            user_ids.append(str(uid))
+            profile_url = href.rstrip("/") + "/"
+            if not profile_url.startswith("http"):
+                profile_url = BASE_URL + profile_url
+            results.append((str(uid), profile_url))
 
-    return user_ids
+    return results
 
 
 def _parse_bio(html: str) -> str | None:
@@ -96,11 +117,31 @@ def _get_all_user_ids(conn) -> list[tuple[str, str]]:
         return [(str(row[0]), row[1]) for row in cur.fetchall()]
 
 
+def _get_existing_user_ids(conn) -> set[str]:
+    """Return all user_ids currently in the DB."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM users")
+        return {str(row[0]) for row in cur.fetchall()}
+
+
 def _get_already_scraped_follower_ids(conn) -> set[str]:
     """Return set of user IDs that already have follow edges in the DB."""
     with conn.cursor() as cur:
         cur.execute("SELECT DISTINCT follower_id FROM follows")
         return {str(row[0]) for row in cur.fetchall()}
+
+
+def _insert_user_to_db(conn, user: dict) -> None:
+    """Insert a user dict into the users table."""
+    vals = [user.get(col) for col in USERS_FIELDNAMES]
+    # Cast user_id to int
+    if vals[0] is not None:
+        try:
+            vals[0] = int(vals[0])
+        except (ValueError, TypeError):
+            return
+    with conn.cursor() as cur:
+        cur.execute(INSERT_USER, vals)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -159,12 +200,20 @@ def main() -> None:
     errors = 0
     auth_blocked = 0
 
+    # Collect follow edges that failed FK so we can retry after discovering new users
+    pending_edges: list[tuple[int, int, str]] = []
+    # Map discovered user_id -> profile_url for new user scraping
+    discovered_users: dict[str, str] = {}
+
     try:
+        # --- Phase 1: Scrape /about + /following for existing users ---
+        print(f"\n[follows] Phase 1: Scraping follows and bios for {len(all_users)} users...")
+
         for i, (user_id, profile_url) in enumerate(all_users, start=1):
             following_url = profile_url.rstrip("/") + "/following"
             about_url = profile_url.rstrip("/") + "/about"
 
-            # --- Scrape /about for bio ---
+            # Scrape /about for bio
             try:
                 about_html = fetch(about_url)
                 if not _is_login_page(about_html):
@@ -176,7 +225,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[follows] ({i}/{len(all_users)}) Error fetching about for {user_id}: {exc}")
 
-            # --- Scrape /following ---
+            # Scrape /following
             print(f"[follows] ({i}/{len(all_users)}) Scraping {following_url}")
 
             try:
@@ -191,31 +240,102 @@ def main() -> None:
                 auth_blocked += 1
                 continue
 
-            followed_ids = _parse_following_page(html)
+            followed_pairs = _parse_following_page(html)
 
-            if not followed_ids:
+            if not followed_pairs:
                 conn.commit()
                 continue
 
+            for fid, furl in followed_pairs:
+                discovered_users[fid] = furl
+
             scraped_at = _scrape_timestamp()
+
             with conn.cursor() as cur:
-                for followed_id in followed_ids:
+                for followed_id, _ in followed_pairs:
                     cur.execute("SAVEPOINT follow_sp")
                     try:
                         cur.execute(INSERT_FOLLOW, (int(user_id), int(followed_id), scraped_at))
                         cur.execute("RELEASE SAVEPOINT follow_sp")
                         total_edges += 1
-                    except (psycopg2.errors.ForeignKeyViolation, ValueError):
+                    except psycopg2.errors.ForeignKeyViolation:
+                        cur.execute("ROLLBACK TO SAVEPOINT follow_sp")
+                        pending_edges.append((int(user_id), int(followed_id), scraped_at))
+                    except ValueError:
                         cur.execute("ROLLBACK TO SAVEPOINT follow_sp")
 
             conn.commit()
+
+        # --- Phase 2: Discover and scrape new users ---
+        existing_ids = _get_existing_user_ids(conn)
+        new_users = {uid: url for uid, url in discovered_users.items() if uid not in existing_ids}
+
+        if new_users:
+            print(f"\n[follows] Phase 2: Discovered {len(new_users)} new users — scraping profiles...")
+            new_users_scraped = 0
+
+            for i, (uid, profile_url) in enumerate(new_users.items(), start=1):
+                print(f"[follows] ({i}/{len(new_users)}) Scraping profile for new user {uid}")
+
+                try:
+                    profile = fetch_user_profile(profile_url)
+                except Exception as exc:
+                    print(f"[follows] Error fetching profile for {uid}: {exc}")
+                    continue
+
+                if not profile:
+                    continue
+
+                _insert_user_to_db(conn, profile)
+                new_users_scraped += 1
+
+                # Also grab bio
+                about_url = profile_url.rstrip("/") + "/about"
+                try:
+                    about_html = fetch(about_url)
+                    if not _is_login_page(about_html):
+                        bio = _parse_bio(about_html)
+                        if bio:
+                            with conn.cursor() as cur:
+                                cur.execute(UPDATE_BIO, (bio, int(uid)))
+                            total_bios += 1
+                except Exception:
+                    pass
+
+                conn.commit()
+
+            print(f"[follows] Phase 2 complete: {new_users_scraped} new users added to DB.")
+        else:
+            print(f"\n[follows] No new users discovered.")
+
+        # --- Phase 3: Retry pending follow edges ---
+        if pending_edges:
+            print(f"\n[follows] Phase 3: Retrying {len(pending_edges)} pending follow edges...")
+            recovered = 0
+            still_failing = 0
+
+            with conn.cursor() as cur:
+                for follower_id, followed_id, scraped_at in pending_edges:
+                    cur.execute("SAVEPOINT retry_sp")
+                    try:
+                        cur.execute(INSERT_FOLLOW, (follower_id, followed_id, scraped_at))
+                        cur.execute("RELEASE SAVEPOINT retry_sp")
+                        recovered += 1
+                        total_edges += 1
+                    except psycopg2.errors.ForeignKeyViolation:
+                        cur.execute("ROLLBACK TO SAVEPOINT retry_sp")
+                        still_failing += 1
+
+            conn.commit()
+            print(f"[follows] Retry: {recovered} recovered, {still_failing} still failing (user not on site)")
 
     finally:
         conn.close()
 
     print(
         f"\n[follows] Done. {total_edges} follow edges, {total_bios} bios updated, "
-        f"{errors} errors, {auth_blocked} auth-blocked."
+        f"{errors} errors, {auth_blocked} auth-blocked, "
+        f"{len(new_users) if 'new_users' in dir() else 0} new users discovered."
     )
 
 
