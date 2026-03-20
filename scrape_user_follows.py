@@ -1,6 +1,8 @@
 """
-Scrape the /following page for every user in the DB and insert follow
-edges into the follows table.
+Scrape the /following page and bio for every user in the DB.
+
+- Inserts follow edges into the follows table.
+- Updates the user's bio in the users table (if present on the about page).
 
 Skips users whose follows have already been scraped (follower_id exists
 in follows table). Gracefully handles auth-gated profiles (303 redirects).
@@ -13,19 +15,16 @@ Usage:
 
 import argparse
 import os
-import re
 from datetime import datetime
 
 import psycopg2
+import psycopg2.errors
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from scraper.rate_limiter import fetch
-from scraper.user_scraper import extract_user_id_from_profile_url
 
 load_dotenv()
-
-BASE_URL = "https://www.personalitycafe.com"
 
 FOLLOWS_DDL = """
     CREATE TABLE IF NOT EXISTS follows (
@@ -36,10 +35,19 @@ FOLLOWS_DDL = """
     );
 """
 
+# Add bio column if it doesn't exist
+ADD_BIO_COLUMN = """
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
+"""
+
 INSERT_FOLLOW = """
     INSERT INTO follows (follower_id, followed_id, scraped_at)
     VALUES (%s, %s, %s)
     ON CONFLICT (follower_id, followed_id) DO NOTHING
+"""
+
+UPDATE_BIO = """
+    UPDATE users SET bio = %s WHERE user_id = %s AND (bio IS NULL OR bio = '')
 """
 
 
@@ -62,6 +70,25 @@ def _parse_following_page(html: str) -> list[str]:
     return user_ids
 
 
+def _parse_bio(html: str) -> str | None:
+    """Extract the 'About Me' bio text from an /about page."""
+    soup = BeautifulSoup(html, "html.parser")
+    about_row = soup.select_one(".about-me-row")
+    if about_row:
+        wrapper = about_row.select_one(".bbWrapper")
+        if wrapper:
+            text = wrapper.get_text("\n", strip=True)
+            return text if text else None
+    return None
+
+
+def _is_login_page(html: str) -> bool:
+    """Check if the response is a login redirect page."""
+    soup = BeautifulSoup(html, "html.parser")
+    html_tag = soup.select_one("html")
+    return bool(html_tag and html_tag.get("data-template") == "login")
+
+
 def _get_all_user_ids(conn) -> list[tuple[str, str]]:
     """Return (user_id, profile_url) for all users in the DB."""
     with conn.cursor() as cur:
@@ -77,7 +104,7 @@ def _get_already_scraped_follower_ids(conn) -> set[str]:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Scrape /following for all users in the DB")
+    parser = argparse.ArgumentParser(description="Scrape /following and bio for all users in the DB")
     parser.add_argument(
         "--max-users",
         type=int,
@@ -101,9 +128,10 @@ def main() -> None:
 
     conn = psycopg2.connect(db_url, connect_timeout=10)
 
-    # Ensure follows table exists
+    # Ensure schema is up to date
     with conn.cursor() as cur:
         cur.execute(FOLLOWS_DDL)
+        cur.execute(ADD_BIO_COLUMN)
     conn.commit()
 
     all_users = _get_all_user_ids(conn)
@@ -127,12 +155,28 @@ def main() -> None:
         return
 
     total_edges = 0
+    total_bios = 0
     errors = 0
     auth_blocked = 0
 
     try:
         for i, (user_id, profile_url) in enumerate(all_users, start=1):
             following_url = profile_url.rstrip("/") + "/following"
+            about_url = profile_url.rstrip("/") + "/about"
+
+            # --- Scrape /about for bio ---
+            try:
+                about_html = fetch(about_url)
+                if not _is_login_page(about_html):
+                    bio = _parse_bio(about_html)
+                    if bio:
+                        with conn.cursor() as cur:
+                            cur.execute(UPDATE_BIO, (bio, int(user_id)))
+                        total_bios += 1
+            except Exception as exc:
+                print(f"[follows] ({i}/{len(all_users)}) Error fetching about for {user_id}: {exc}")
+
+            # --- Scrape /following ---
             print(f"[follows] ({i}/{len(all_users)}) Scraping {following_url}")
 
             try:
@@ -142,10 +186,7 @@ def main() -> None:
                 errors += 1
                 continue
 
-            # Check for login redirect (auth-gated profile)
-            soup_check = BeautifulSoup(html, "html.parser")
-            template = soup_check.select_one("html")
-            if template and template.get("data-template") == "login":
+            if _is_login_page(html):
                 print(f"[follows] Skipping {user_id} — requires auth")
                 auth_blocked += 1
                 continue
@@ -153,10 +194,7 @@ def main() -> None:
             followed_ids = _parse_following_page(html)
 
             if not followed_ids:
-                # Insert a self-referencing edge so we know this user was scraped
-                # (they just follow nobody). Actually, just skip — the already_scraped
-                # check uses DISTINCT follower_id, so we need at least one row.
-                # We'll handle this by just continuing.
+                conn.commit()
                 continue
 
             scraped_at = _scrape_timestamp()
@@ -175,7 +213,10 @@ def main() -> None:
     finally:
         conn.close()
 
-    print(f"\n[follows] Done. {total_edges} follow edges inserted, {errors} errors, {auth_blocked} auth-blocked.")
+    print(
+        f"\n[follows] Done. {total_edges} follow edges, {total_bios} bios updated, "
+        f"{errors} errors, {auth_blocked} auth-blocked."
+    )
 
 
 if __name__ == "__main__":

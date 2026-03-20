@@ -214,7 +214,6 @@ def parse_user_profile_page(html: str, profile_url: str, user_id: str | None) ->
     if not join_date:
         join_date = stats.get("joined")
 
-    # TODO: get about me description as well, and follower and following list
     user = _build_user_record(
         user_id=user_id,
         profile_url=profile_url,

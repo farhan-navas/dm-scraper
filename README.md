@@ -53,6 +53,7 @@ Data is written directly into a Postgres database. Tables are created automatica
 | `points`              | integer     | Tooltip "Points".                                      |
 | `media_count`         | integer     | Tooltip "Media" uploads.                               |
 | `showcase_count`      | integer     | Tooltip "Showcase items".                              |
+| `bio`                 | text/null   | Free-text "About Me" from the user's about page.       |
 | `scraped_at`          | timestamptz | When this profile snapshot was saved.                  |
 
 ### `Follows`

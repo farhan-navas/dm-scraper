@@ -5,8 +5,7 @@ from scraper.user_scraper import fetch_user_profile
 
 def main() -> None:
     user_urls = [
-        # TODO: fill up with test data as required
-        "https://www.personalitycafe.com/members/..."
+        "https://www.personalitycafe.com/members/daleks_exterminate.39616/"
     ]
     users_csv_path = "users.csv"
 

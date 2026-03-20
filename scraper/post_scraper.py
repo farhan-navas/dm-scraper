@@ -309,6 +309,9 @@ def _extract_reaction_bar(post_div) -> dict | None:
         "others_count": others_count,
     }
 
+# TODO: re-enable reaction scraping — reaction bars are empty without auth,
+# and overlay fetches cause timeouts. Once auth is reliably in place, wire
+# _parse_reaction_overlay back into _build_interactions_for_post.
 def _parse_reaction_overlay(url: str) -> list[dict]:
     try:
         html = fetch(url)
