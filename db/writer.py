@@ -49,6 +49,7 @@ DDL = {
         CREATE TABLE IF NOT EXISTS threads (
             thread_id BIGINT PRIMARY KEY,
             thread_url TEXT,
+            thread_title TEXT,
             forum_url TEXT,
             first_seen TIMESTAMPTZ,
             last_seen TIMESTAMPTZ,
@@ -167,6 +168,9 @@ class DbWriter:
         with self.conn.cursor() as cur:
             for ddl in DDL.values():
                 cur.execute(ddl)
+            # Schema migrations for existing tables
+            cur.execute("ALTER TABLE threads ADD COLUMN IF NOT EXISTS thread_title TEXT")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT")
         self.conn.commit()
 
     # ------------------------------------------------------------------

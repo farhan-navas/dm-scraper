@@ -605,6 +605,7 @@ def scrape_thread(
     starter_user_id: str | None = None
     prev_post_id: str | None = None
     prev_user_id: str | None = None
+    thread_title: str | None = None
 
     page_url = thread_url
     page = 1
@@ -613,6 +614,13 @@ def scrape_thread(
         print(f"[scrape-thread] Fetching page {page_url}")
         html = fetch(page_url)
         soup = BeautifulSoup(html, "html.parser")
+
+        # Grab thread title from first page
+        if thread_title is None:
+            h1 = soup.select_one("h1")
+            if h1:
+                thread_title = h1.get_text(strip=True)
+
         _inject_nested_replies(soup, page_url)
         page_posts = parse_posts_from_page(soup)
 
@@ -696,6 +704,7 @@ def scrape_thread(
     thread_row = {
         "thread_id": thread_id,
         "thread_url": thread_url,
+        "thread_title": thread_title,
         "forum_url": forum_url,
         "first_seen": thread_scrape_ts,
         "last_seen": thread_scrape_ts,

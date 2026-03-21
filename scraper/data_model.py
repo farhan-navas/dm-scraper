@@ -48,6 +48,7 @@ INTERACTIONS_FIELDNAMES: list[str] = [
 THREADS_FIELDNAMES: list[str] = [
     "thread_id",
     "thread_url",
+    "thread_title",
     "forum_url",
     "first_seen",
     "last_seen",
