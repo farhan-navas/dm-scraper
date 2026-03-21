@@ -145,6 +145,10 @@ def _load_nested_replies_for_label(label, posts_loaded: int, request_uri: str) -
 
     return html_fragments
 
+# TODO: nested reply loading is slow and error-prone — each hidden reply
+# triggers a separate HTTP request that often returns 400. On large threads
+# this adds minutes of retries. Consider disabling nested reply loading
+# or switching to a single bulk fetch approach.
 def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
     parsed = urlparse(page_url)
     request_uri = parsed.path + (("?" + parsed.query) if parsed.query else "")

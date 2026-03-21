@@ -1,8 +1,9 @@
 """
-Scrape the /following page and bio for every user in the DB.
+Scrape the /following page, bio, and activity for every user in the DB.
 
 - Inserts follow edges into the follows table.
 - Updates the user's bio in the users table (if present on the about page).
+- Scrapes user activity (reactions, comments, thread creates) into interactions.
 - Discovers new users from follow lists and scrapes their profiles.
 
 Each run expands the graph by one level. Re-run until no new users are
@@ -15,6 +16,7 @@ Usage:
     uv run scrape_user_graph.py
     uv run scrape_user_graph.py --max-users 100    # limit for testing
     uv run scrape_user_graph.py --no-skip           # re-scrape all users
+    uv run scrape_user_graph.py --no-activity        # skip activity scraping
 """
 
 import argparse
@@ -28,6 +30,7 @@ from dotenv import load_dotenv
 
 from scraper.rate_limiter import fetch
 from scraper.user_scraper import fetch_user_profile
+from scraper.activity_scraper import scrape_user_activity, strip_extra_fields
 
 load_dotenv()
 
@@ -65,7 +68,19 @@ INSERT_USER = """
     ON CONFLICT (user_id) DO NOTHING
 """
 
-from scraper.data_model import USERS_FIELDNAMES
+from scraper.data_model import INTERACTIONS_FIELDNAMES, USERS_FIELDNAMES
+
+INSERT_INTERACTION = """
+    INSERT INTO interactions ({cols})
+    VALUES ({phs})
+    ON CONFLICT (interaction_id) DO NOTHING
+""".format(
+    cols=", ".join(INTERACTIONS_FIELDNAMES),
+    phs=", ".join(["%s"] * len(INTERACTIONS_FIELDNAMES)),
+)
+
+# Columns that need int casting for interactions
+_BIGINT_COLS = {"source_user_id", "target_user_id", "thread_id"}
 
 
 def _scrape_timestamp() -> str:
@@ -157,6 +172,17 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Re-scrape all users even if already in follows table",
     )
+    parser.add_argument(
+        "--no-activity",
+        action="store_true",
+        help="Skip activity scraping (only scrape follows and bios)",
+    )
+    parser.add_argument(
+        "--activity-pages",
+        type=int,
+        default=None,
+        help="Max activity pages per user (None = all pages)",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +223,7 @@ def main() -> None:
 
     total_edges = 0
     total_bios = 0
+    total_activity = 0
     errors = 0
     auth_blocked = 0
 
@@ -204,6 +231,7 @@ def main() -> None:
     pending_edges: list[tuple[int, int, str]] = []
     # Map discovered user_id -> profile_url for new user scraping
     discovered_users: dict[str, str] = {}
+    scrape_activity = not args.no_activity
 
     try:
         # --- Phase 1: Scrape /about + /following for existing users ---
@@ -263,6 +291,37 @@ def main() -> None:
                         pending_edges.append((int(user_id), int(followed_id), scraped_at))
                     except ValueError:
                         cur.execute("ROLLBACK TO SAVEPOINT follow_sp")
+
+            # --- Scrape /activity ---
+            if scrape_activity:
+                print(f"[activity] ({i}/{len(all_users)}) Scraping activity for user {user_id}")
+                try:
+                    activities = scrape_user_activity(
+                        profile_url, user_id, max_pages=args.activity_pages
+                    )
+                    if activities:
+                        with conn.cursor() as cur:
+                            for act in activities:
+                                clean = strip_extra_fields(act)
+                                vals = []
+                                for col in INTERACTIONS_FIELDNAMES:
+                                    v = clean.get(col)
+                                    if col in _BIGINT_COLS and v is not None:
+                                        try:
+                                            v = int(v)
+                                        except (ValueError, TypeError):
+                                            v = None
+                                    vals.append(v)
+                                cur.execute("SAVEPOINT act_sp")
+                                try:
+                                    cur.execute(INSERT_INTERACTION, vals)
+                                    cur.execute("RELEASE SAVEPOINT act_sp")
+                                    total_activity += 1
+                                except (psycopg2.errors.ForeignKeyViolation,
+                                        psycopg2.errors.UniqueViolation):
+                                    cur.execute("ROLLBACK TO SAVEPOINT act_sp")
+                except Exception as exc:
+                    print(f"[activity] Error scraping activity for {user_id}: {exc}")
 
             conn.commit()
 
@@ -333,8 +392,8 @@ def main() -> None:
         conn.close()
 
     print(
-        f"\n[follows] Done. {total_edges} follow edges, {total_bios} bios updated, "
-        f"{errors} errors, {auth_blocked} auth-blocked, "
+        f"\n[graph] Done. {total_edges} follow edges, {total_activity} activity interactions, "
+        f"{total_bios} bios, {errors} errors, {auth_blocked} auth-blocked, "
         f"{len(new_users) if 'new_users' in dir() else 0} new users discovered."
     )
 
