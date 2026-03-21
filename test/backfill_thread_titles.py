@@ -5,12 +5,16 @@ Fetches each thread's page and extracts the <h1> title. Skips threads
 that already have a title set.
 
 Usage:
-    uv run db/backfill_thread_titles.py
-    uv run db/backfill_thread_titles.py --max-threads 50   # limit for testing
+    uv run test/backfill_thread_titles.py
+    uv run test/backfill_thread_titles.py --max-threads 50   # limit for testing
 """
 
 import argparse
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import psycopg2
 from bs4 import BeautifulSoup
