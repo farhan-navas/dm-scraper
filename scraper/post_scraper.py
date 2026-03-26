@@ -115,23 +115,12 @@ def _load_nested_replies_for_label(label, posts_loaded: int, request_uri: str) -
 
     url = BASE_URL + LOAD_MORE_POSTS_PATH + "?" + urlencode(params, doseq=True)
 
-    max_retries = 3
-    data = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp_text = fetch(url)
-            data = json.loads(resp_text)
-            break
-        except Exception as exc:
-            if attempt < max_retries:
-                delay = 5 * attempt
-                print(f"[nested] Failed to load replies for parent {parent_post_id} "
-                      f"(attempt {attempt}/{max_retries}): {exc} — retrying in {delay}s...")
-                time.sleep(delay)
-            else:
-                print(f"[nested] Failed to load replies for parent {parent_post_id} "
-                      f"after {max_retries} attempts: {exc}")
-                return []
+    try:
+        resp_text = fetch(url)
+        data = json.loads(resp_text)
+    except Exception as exc:
+        print(f"[nested] Failed to load replies for parent {parent_post_id}: {exc}")
+        return []
 
     # XenForo returns {'html': {'content': '<div>...</div>'}}
     html_fragments: list[str] = []
@@ -145,10 +134,6 @@ def _load_nested_replies_for_label(label, posts_loaded: int, request_uri: str) -
 
     return html_fragments
 
-# TODO: nested reply loading is slow and error-prone — each hidden reply
-# triggers a separate HTTP request that often returns 400. On large threads
-# this adds minutes of retries. Consider disabling nested reply loading
-# or switching to a single bulk fetch approach.
 def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
     parsed = urlparse(page_url)
     request_uri = parsed.path + (("?" + parsed.query) if parsed.query else "")
@@ -162,10 +147,9 @@ def _inject_nested_replies(soup: BeautifulSoup, page_url: str) -> None:
             container = label.find_previous("div", class_="js-nested-children-container")
 
             if not container:
-                # nothing to attach to so just hide to avoid infinite loop, this works fine at runtime
                 label["class"] = label.get("class") + ["hidden"]  # type: ignore
                 continue
-            
+
             raw_pl = label.get("posts-loaded")
             posts_loaded = int(raw_pl) if isinstance(raw_pl, str) else 0
 

@@ -71,12 +71,14 @@ SESSION.headers.update({
 # Load auth cookies from environment if available.
 # XF_USER is the persistent login cookie (lasts 30 days).
 # CDNCSRF is the CDN-level CSRF token.
+# Domain must match www.personalitycafe.com (not .personalitycafe.com)
+# to avoid duplicate cookie conflicts with server-set values.
 _xf_user = os.environ.get("XF_USER")
 _cdncsrf = os.environ.get("CDNCSRF")
 if _xf_user:
-    SESSION.cookies.set("xf_user", _xf_user, domain=".personalitycafe.com")
+    SESSION.cookies.set("xf_user", _xf_user, domain="www.personalitycafe.com")
 if _cdncsrf:
-    SESSION.cookies.set("cdncsrf", _cdncsrf, domain=".personalitycafe.com")
+    SESSION.cookies.set("cdncsrf", _cdncsrf, domain="www.personalitycafe.com")
 
 DEFAULT_MAX_CALLS = 1
 DEFAULT_PERIOD = 2.0
@@ -136,6 +138,24 @@ def fetch(url: str, max_retries: int = 3, max_429_retries: int = 5, cookies=None
             continue
 
         consecutive_429s = 0
+
+        # Handle 400 cookie/session errors — refresh session cookies and retry
+        if resp.status_code == 400:
+            try:
+                body = resp.json()
+                errors = body.get("errors", [])
+            except Exception:
+                errors = []
+            errors_lower = " ".join(str(e).lower() for e in errors)
+            if "cookies are required" in errors_lower or "security error" in errors_lower:
+                if attempt < max_retries:
+                    _get_limiter().wait()
+                    try:
+                        SESSION.get("https://www.personalitycafe.com/", timeout=15)
+                    except Exception:
+                        pass
+                    print(f"[fetch] 400 session expired on {url}, refreshed — retrying...")
+                    continue
 
         # Handle 5xx with backoff
         if 500 <= resp.status_code < 600:

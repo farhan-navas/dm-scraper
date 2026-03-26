@@ -111,20 +111,7 @@ def _parse_activity_items(soup: BeautifulSoup, source_user_id: str) -> list[dict
                 "source_user_id": source_user_id,
                 "target_user_id": None,
                 "thread_id": None,
-                "interaction_type": "comment",
-                "scraped_at": scraped_at,
-                "_timestamp": timestamp,
-            })
-
-        elif "posted the thread" in title_text:
-            results.append({
-                "interaction_id": str(uuid4()),
-                "replying_post_id": None,
-                "target_post_id": None,
-                "source_user_id": source_user_id,
-                "target_user_id": None,
-                "thread_id": None,
-                "interaction_type": "thread_create",
+                "interaction_type": "reply",
                 "scraped_at": scraped_at,
                 "_timestamp": timestamp,
             })
