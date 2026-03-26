@@ -166,8 +166,13 @@ class DbWriter:
 
     def _ensure_tables(self) -> None:
         with self.conn.cursor() as cur:
-            for ddl in DDL.values():
-                cur.execute(ddl)
+            for name, ddl in DDL.items():
+                cur.execute("SAVEPOINT ddl_sp")
+                try:
+                    cur.execute(ddl)
+                    cur.execute("RELEASE SAVEPOINT ddl_sp")
+                except psycopg2.errors.UniqueViolation:
+                    cur.execute("ROLLBACK TO SAVEPOINT ddl_sp")
             # Schema migrations for existing tables
             cur.execute("ALTER TABLE threads ADD COLUMN IF NOT EXISTS thread_title TEXT")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT")
