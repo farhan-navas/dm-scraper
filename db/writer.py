@@ -174,8 +174,16 @@ class DbWriter:
                 except psycopg2.errors.UniqueViolation:
                     cur.execute("ROLLBACK TO SAVEPOINT ddl_sp")
             # Schema migrations for existing tables
-            cur.execute("ALTER TABLE threads ADD COLUMN IF NOT EXISTS thread_title TEXT")
-            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT")
+            for alter in [
+                "ALTER TABLE threads ADD COLUMN IF NOT EXISTS thread_title TEXT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT",
+            ]:
+                cur.execute("SAVEPOINT alter_sp")
+                try:
+                    cur.execute(alter)
+                    cur.execute("RELEASE SAVEPOINT alter_sp")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT alter_sp")
         self.conn.commit()
 
     # ------------------------------------------------------------------
