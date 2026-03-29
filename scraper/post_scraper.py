@@ -367,6 +367,8 @@ def get_thread_list(
             if not href:
                 continue
             url = absolute_url(str(href))
+            # Strip /unread suffix — it causes 400s on AJAX nested reply requests
+            url = re.sub(r"/unread/?$", "/", url)
             if url in seen:
                 continue
             seen.add(url)
@@ -591,6 +593,8 @@ def scrape_thread(
     prev_user_id: str | None = None
     thread_title: str | None = None
 
+    # Strip /unread suffix — it causes 400s on AJAX nested reply requests
+    thread_url = re.sub(r"/unread/?$", "/", thread_url)
     page_url = thread_url
     page = 1
 
