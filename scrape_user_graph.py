@@ -197,8 +197,13 @@ def main() -> None:
 
     # Ensure schema is up to date
     with conn.cursor() as cur:
-        cur.execute(FOLLOWS_DDL)
-        cur.execute(ADD_BIO_COLUMN)
+        for ddl in [FOLLOWS_DDL, ADD_BIO_COLUMN]:
+            cur.execute("SAVEPOINT schema_sp")
+            try:
+                cur.execute(ddl)
+                cur.execute("RELEASE SAVEPOINT schema_sp")
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT schema_sp")
     conn.commit()
 
     all_users = _get_all_user_ids(conn)
