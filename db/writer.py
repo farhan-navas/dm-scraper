@@ -156,22 +156,24 @@ def _row_values(row: dict, fieldnames: list[str]) -> list:
 class DbWriter:
     """Wraps a single Postgres connection with per-table insert helpers."""
 
-    def __init__(self, db_url: str):
+    def __init__(self, db_url: str, ensure_schema: bool = True):
         logger.info("Connecting to database…")
         self.conn = psycopg2.connect(db_url, connect_timeout=10)
-        self._ensure_tables()
+        if ensure_schema:
+            self._ensure_tables()
         self._fk_failures = 0
         self._failed_interactions: list[dict] = []
         logger.info("DbWriter ready.")
 
     def _ensure_tables(self) -> None:
         with self.conn.cursor() as cur:
+            cur.execute("SET lock_timeout = '3s'")
             for name, ddl in DDL.items():
                 cur.execute("SAVEPOINT ddl_sp")
                 try:
                     cur.execute(ddl)
                     cur.execute("RELEASE SAVEPOINT ddl_sp")
-                except psycopg2.errors.UniqueViolation:
+                except Exception:
                     cur.execute("ROLLBACK TO SAVEPOINT ddl_sp")
             # Schema migrations for existing tables
             for alter in [
@@ -184,6 +186,7 @@ class DbWriter:
                     cur.execute("RELEASE SAVEPOINT alter_sp")
                 except Exception:
                     cur.execute("ROLLBACK TO SAVEPOINT alter_sp")
+            cur.execute("SET lock_timeout = '0'")
         self.conn.commit()
 
     # ------------------------------------------------------------------

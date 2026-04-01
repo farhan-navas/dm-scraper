@@ -264,7 +264,7 @@ def main() -> None:
         if not db_url:
             raise RuntimeError("DATABASE_URL not set. Use --csv for CSV-only mode.")
         from db.writer import DbWriter
-        db_writer = DbWriter(db_url)
+        db_writer = DbWriter(db_url, ensure_schema=False)
 
     try:
         scrape_single_forum(

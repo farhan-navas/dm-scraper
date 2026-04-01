@@ -193,33 +193,27 @@ def main() -> None:
     if not db_url:
         raise RuntimeError("DATABASE_URL not set")
 
+    print("[graph] Connecting to DB...")
     conn = psycopg2.connect(db_url, connect_timeout=10)
+    print("[graph] Connected.")
 
-    # Ensure schema is up to date
-    with conn.cursor() as cur:
-        for ddl in [FOLLOWS_DDL, ADD_BIO_COLUMN]:
-            cur.execute("SAVEPOINT schema_sp")
-            try:
-                cur.execute(ddl)
-                cur.execute("RELEASE SAVEPOINT schema_sp")
-            except Exception:
-                cur.execute("ROLLBACK TO SAVEPOINT schema_sp")
-    conn.commit()
-
+    print("[graph] Loading users from DB...")
     all_users = _get_all_user_ids(conn)
-    print(f"[follows] Found {len(all_users)} users in DB")
+    print(f"[graph] Found {len(all_users)} users in DB")
 
     if not args.no_skip:
+        print("[graph] Loading already-scraped follower IDs...")
         already_scraped = _get_already_scraped_follower_ids(conn)
+        print(f"[graph] Loaded {len(already_scraped)} already-scraped follower IDs")
         before = len(all_users)
         all_users = [(uid, url) for uid, url in all_users if uid not in already_scraped]
         skipped = before - len(all_users)
         if skipped:
-            print(f"[follows] Skipping {skipped} already-scraped users, {len(all_users)} remaining")
+            print(f"[graph] Skipping {skipped} already-scraped users, {len(all_users)} remaining")
 
     if args.max_users:
         all_users = all_users[:args.max_users]
-        print(f"[follows] Limited to {args.max_users} users")
+        print(f"[graph] Limited to {args.max_users} users")
 
     if not all_users:
         print("[follows] No users to scrape — done.")
