@@ -139,23 +139,10 @@ def fetch(url: str, max_retries: int = 3, max_429_retries: int = 5, cookies=None
 
         consecutive_429s = 0
 
-        # Handle 400 cookie/session errors — refresh session cookies and retry
+        # Handle 400 cookie/session errors — fail immediately, no retry
+        # Nested reply AJAX endpoints frequently return 400 and retrying wastes time
         if resp.status_code == 400:
-            try:
-                body = resp.json()
-                errors = body.get("errors", [])
-            except Exception:
-                errors = []
-            errors_lower = " ".join(str(e).lower() for e in errors)
-            if "cookies are required" in errors_lower or "security error" in errors_lower:
-                if attempt < max_retries:
-                    _get_limiter().wait()
-                    try:
-                        SESSION.get("https://www.personalitycafe.com/", timeout=15)
-                    except Exception:
-                        pass
-                    print(f"[fetch] 400 session expired on {url}, refreshed — retrying...")
-                    continue
+            resp.raise_for_status()
 
         # Handle 5xx with backoff
         if 500 <= resp.status_code < 600:
