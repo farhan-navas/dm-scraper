@@ -194,7 +194,7 @@ def main() -> None:
         raise RuntimeError("DATABASE_URL not set")
 
     print("[graph] Connecting to DB...")
-    conn = psycopg2.connect(db_url, connect_timeout=10)
+    conn = psycopg2.connect(db_url, connect_timeout=10, options="-c statement_timeout=30000")
     print("[graph] Connected.")
 
     print("[graph] Loading users from DB...")

@@ -113,6 +113,7 @@ def scrape_single_forum(
     skip_scraped: bool = True,
     db_writer=None,
     csv_mode: bool = False,
+    start_from: int = 0,
 ):
     slug = _slug_from_url(forum_url)
 
@@ -142,6 +143,10 @@ def scrape_single_forum(
         if skipped:
             print(f"[main] Skipping {skipped} already-scraped threads, {len(new_urls)} new to scrape")
         thread_urls = new_urls
+
+    if start_from > 0:
+        thread_urls = thread_urls[start_from:]
+        print(f"[main] Starting from thread {start_from}, {len(thread_urls)} remaining")
 
     if not thread_urls:
         print("[main] No new threads to scrape — done.")
@@ -238,6 +243,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write to CSV files instead of Postgres (debug mode)",
     )
+    parser.add_argument(
+        "--start-from",
+        type=int,
+        default=0,
+        help="Skip the first N threads in the list (continue from thread N+1)",
+    )
     return parser.parse_args()
 
 
@@ -275,6 +286,7 @@ def main() -> None:
             thread_page_limit=None,
             skip_scraped=not args.no_skip,
             db_writer=db_writer,
+            start_from=args.start_from,
             csv_mode=args.csv,
         )
     finally:
