@@ -1,6 +1,6 @@
 """
-Scrape a user's /activity page to extract reactions, comments, and thread
-creation events. Handles "Load More" pagination to get full history.
+Scrape a user's /activity page to extract reactions and replies.
+Handles "Load More" pagination to get full history.
 
 Returns structured dicts ready for insertion into the interactions table.
 """

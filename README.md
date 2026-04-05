@@ -4,7 +4,7 @@ Lightweight Python scraper that collects thread posts and public user metadata f
 
 ## DB Schema
 
-Data is written directly into a Postgres database. Tables are created automatically on first run.
+Data is written directly into a Postgres database. Tables are created via `DbWriter(db_url, ensure_schema=True)` or by running `db/load_csv_to_postgres.py`.
 
 ### `Thread`
 
@@ -86,7 +86,7 @@ Schema:
 | `source_user_id`   | bigint      | FK → `user.user_id`, the person replying                                                     |
 | `target_user_id`   | bigint      | FK → `user.user_id`, the person that is being replied to                                     |
 | `thread_id`        | bigint      | Convenience FK for filtering.                                                                |
-| `interaction_type` | text        | Enum (`quote`, `mention`, `reply`).                                                          |
+| `interaction_type` | text        | Enum (`quote`, `mention`, `reply`, `reaction-like`, `reaction-love`, etc.).                   |
 | `scraped_at`       | timestamptz | Timestamp applied when emitting the derived edge.                                            |
 
 ## Running scraper
@@ -97,6 +97,7 @@ Orchestrator lives in `run_forum_scrape.py`. Default mode writes directly to Pos
 uv run run_forum_scrape.py --forum-index <N>              # scrape forum N to Postgres, skip already-scraped threads
 uv run run_forum_scrape.py --forum-index <N> --no-skip    # re-scrape all threads in forum N
 uv run run_forum_scrape.py --forum-index <N> --csv        # write to CSV files instead (debug mode)
+uv run run_forum_scrape.py --forum-index <N> --start-from 500  # skip first 500 threads
 ```
 
 Forum indices correspond to rows in `forums.csv` (0-indexed).
@@ -117,8 +118,12 @@ To get these: log into PersonalityCafe in your browser (check "Stay logged in"),
 ### Utility scripts
 
 ```bash
-uv run scrape_user_graph.py                    # scrape /following for all users in DB
-uv run scrape_user_graph.py --max-users 10     # limit for testing
+uv run scrape_user_graph.py                              # scrape follows, bios, and activity for all users
+uv run scrape_user_graph.py --max-users 10               # limit for testing
+uv run scrape_user_graph.py --start-from 1000            # skip first 1000 users
+uv run scrape_user_graph.py --no-activity                # skip activity scraping (follows + bios only)
+uv run scrape_user_graph.py --activity-pages 3           # limit activity pages per user
+uv run scrape_user_graph.py --no-skip                    # re-scrape all users
 uv run db/check_counts.py                        # show row counts per table + DB size
 uv run db/retry_failed_interactions.py            # retry FK-failed interactions from db_logs/
 uv run db/normalize_post_ids.py --apply          # normalize bare-digit post IDs in CSVs
@@ -170,8 +175,11 @@ COM3 (SMP):
 
 - TOTAL ROWS BEF: 7057039
 - TOTAL ROWS AFT: 10712504
+- TOTAL ROWS NOW: 13188886
 
 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21
 22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40
 41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60
-61,62,63,64,65,66,67,68
+61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80
+81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100
+101,102,103,104,105,106,107

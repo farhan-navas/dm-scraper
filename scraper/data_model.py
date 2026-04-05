@@ -1,4 +1,4 @@
-"""Shared schema metadata for CSV outputs."""
+"""Shared schema metadata for DB and CSV outputs."""
 
 POSTS_FIELDNAMES: list[str] = [
     "thread_id",

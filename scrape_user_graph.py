@@ -118,6 +118,42 @@ def _parse_bio(html: str) -> str | None:
     return None
 
 
+def _parse_about_follows(html: str) -> tuple[list[tuple[str, str]], bool]:
+    """Parse following data from the /about page.
+
+    Returns (follows_list, has_more) where follows_list is a list of
+    (user_id, profile_url) pairs shown inline, and has_more is True
+    if there's a "... and N more" link (meaning /following has more).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    follows: list[tuple[str, str]] = []
+    has_more = False
+    seen: set[str] = set()
+
+    for col in soup.select(".following-col"):
+        label = col.select_one(".about-identifier")
+        if not label or "following" not in label.get_text(strip=True).lower():
+            continue
+
+        for el in col.select("a[data-user-id]"):
+            uid = el.get("data-user-id")
+            href = el.get("href")
+            if uid and uid not in seen and href:
+                seen.add(uid)
+                profile_url = href.rstrip("/") + "/"
+                if not profile_url.startswith("http"):
+                    profile_url = BASE_URL + profile_url
+                follows.append((str(uid), profile_url))
+
+        see_more = col.select_one('a[href*="/following"]')
+        if see_more and "more" in see_more.get_text(strip=True).lower():
+            has_more = True
+
+        break
+
+    return follows, has_more
+
+
 def _is_login_page(html: str) -> bool:
     """Check if the response is a login redirect page."""
     soup = BeautifulSoup(html, "html.parser")
@@ -250,34 +286,52 @@ def main() -> None:
             following_url = profile_url.rstrip("/") + "/following"
             about_url = profile_url.rstrip("/") + "/about"
 
-            # Scrape /about for bio
+            # Scrape /about for bio + inline follows
+            about_follows: list[tuple[str, str]] = []
+            needs_following_page = True
+            about_login = False
+
             try:
                 about_html = fetch(about_url)
-                if not _is_login_page(about_html):
+                if _is_login_page(about_html):
+                    about_login = True
+                else:
                     bio = _parse_bio(about_html)
                     if bio:
                         with conn.cursor() as cur:
                             cur.execute(UPDATE_BIO, (bio, int(user_id)))
                         total_bios += 1
+                    about_follows, has_more = _parse_about_follows(about_html)
+                    if not has_more:
+                        needs_following_page = False
             except Exception as exc:
-                print(f"[follows] ({i}/{len(all_users)}) Error fetching about for {user_id}: {exc}")
+                print(f"[graph] ({i}/{len(all_users)}) Error fetching about for {user_id}: {exc}")
 
-            # Scrape /following
-            print(f"[follows] ({i}/{len(all_users)}) Scraping {following_url}")
+            # Only fetch /following if /about showed "... and N more"
+            if needs_following_page and not about_login:
+                print(f"[graph] ({i}/{len(all_users)}) Scraping {following_url}")
+                try:
+                    html = fetch(following_url)
+                except Exception as exc:
+                    print(f"[graph] Error fetching {following_url}: {exc}")
+                    errors += 1
+                    followed_pairs = about_follows
+                    needs_following_page = False
 
-            try:
-                html = fetch(following_url)
-            except Exception as exc:
-                print(f"[follows] Error fetching {following_url}: {exc}")
-                errors += 1
-                continue
-
-            if _is_login_page(html):
-                print(f"[follows] Skipping {user_id} — requires auth")
+                if needs_following_page:
+                    if _is_login_page(html):
+                        print(f"[graph] Skipping {user_id} — requires auth")
+                        auth_blocked += 1
+                        followed_pairs = about_follows
+                    else:
+                        followed_pairs = _parse_following_page(html)
+            elif about_login:
+                print(f"[graph] Skipping {user_id} — requires auth")
                 auth_blocked += 1
-                continue
-
-            followed_pairs = _parse_following_page(html)
+                followed_pairs = []
+            else:
+                print(f"[graph] ({i}/{len(all_users)}) User {user_id} — {len(about_follows)} follows from /about (no more)")
+                followed_pairs = about_follows
 
             if not followed_pairs:
                 conn.commit()
