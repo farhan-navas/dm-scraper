@@ -183,6 +183,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Max activity pages per user (None = all pages)",
     )
+    parser.add_argument(
+        "--start-from",
+        type=int,
+        default=0,
+        help="Skip the first N users in the list (continue from user N+1)",
+    )
     return parser.parse_args()
 
 
@@ -210,6 +216,10 @@ def main() -> None:
         skipped = before - len(all_users)
         if skipped:
             print(f"[graph] Skipping {skipped} already-scraped users, {len(all_users)} remaining")
+
+    if args.start_from > 0:
+        all_users = all_users[args.start_from:]
+        print(f"[graph] Starting from user {args.start_from}, {len(all_users)} remaining")
 
     if args.max_users:
         all_users = all_users[:args.max_users]
