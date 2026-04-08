@@ -20,8 +20,12 @@ Usage:
 """
 
 import argparse
+import csv
 import os
+import random
+import string
 from datetime import datetime
+from pathlib import Path
 
 import psycopg2
 import psycopg2.errors
@@ -272,6 +276,15 @@ def main() -> None:
     errors = 0
     auth_blocked = 0
 
+    # Set up error log
+    log_dir = Path("db_logs")
+    log_dir.mkdir(exist_ok=True)
+    run_hash = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    error_log_path = log_dir / f"user_graph_errors-{run_hash}.csv"
+    error_log = open(error_log_path, "w", newline="", encoding="utf-8")
+    error_writer = csv.writer(error_log)
+    error_writer.writerow(["user_id", "url", "error"])
+
     # Collect follow edges that failed FK so we can retry after discovering new users
     pending_edges: list[tuple[int, int, str]] = []
     # Map discovered user_id -> profile_url for new user scraping
@@ -306,6 +319,8 @@ def main() -> None:
                         needs_following_page = False
             except Exception as exc:
                 print(f"[graph] ({i}/{len(all_users)}) Error fetching about for {user_id}: {exc}")
+                error_writer.writerow([user_id, about_url, str(exc)])
+                errors += 1
 
             # Only fetch /following if /about showed "... and N more"
             if needs_following_page and not about_login:
@@ -314,6 +329,7 @@ def main() -> None:
                     html = fetch(following_url)
                 except Exception as exc:
                     print(f"[graph] Error fetching {following_url}: {exc}")
+                    error_writer.writerow([user_id, following_url, str(exc)])
                     errors += 1
                     followed_pairs = about_follows
                     needs_following_page = False
@@ -385,6 +401,8 @@ def main() -> None:
                                     cur.execute("ROLLBACK TO SAVEPOINT act_sp")
                 except Exception as exc:
                     print(f"[activity] Error scraping activity for {user_id}: {exc}")
+                    error_writer.writerow([user_id, profile_url + "activity", str(exc)])
+                    errors += 1
 
             conn.commit()
 
@@ -403,6 +421,7 @@ def main() -> None:
                     profile = fetch_user_profile(profile_url)
                 except Exception as exc:
                     print(f"[follows] Error fetching profile for {uid}: {exc}")
+                    error_writer.writerow([uid, profile_url, str(exc)])
                     continue
 
                 if not profile:
@@ -453,12 +472,17 @@ def main() -> None:
 
     finally:
         conn.close()
+        error_log.close()
+        if errors == 0:
+            error_log_path.unlink(missing_ok=True)
 
     print(
         f"\n[graph] Done. {total_edges} follow edges, {total_activity} activity interactions, "
         f"{total_bios} bios, {errors} errors, {auth_blocked} auth-blocked, "
         f"{len(new_users) if 'new_users' in dir() else 0} new users discovered."
     )
+    if errors:
+        print(f"[graph] Error log: {error_log_path}")
 
 
 if __name__ == "__main__":
