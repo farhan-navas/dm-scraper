@@ -120,6 +120,18 @@ def main() -> None:
         raise
 
     logger.info("Connected.")
+
+    # Snapshot row counts before loading
+    before_counts = {}
+    with conn.cursor() as cur:
+        for table in TABLE_PREFIXES:
+            try:
+                cur.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
+                before_counts[table] = cur.fetchone()[0]
+            except Exception:
+                before_counts[table] = 0
+                conn.rollback()
+
     with conn:
         with conn.cursor() as cur:
             logger.info("Ensuring tables exist…")
@@ -259,6 +271,29 @@ def main() -> None:
                     )
                     logger.info("Inserted into %s (rowcount=%s)", table, cur.rowcount)
         conn.commit()
+
+    # Summary
+    after_counts = {}
+    with conn.cursor() as cur:
+        for table in TABLE_PREFIXES:
+            cur.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
+            after_counts[table] = cur.fetchone()[0]
+
+    logger.info("")
+    logger.info("=== SUMMARY ===")
+    logger.info("%-20s %12s %12s %12s", "Table", "Before", "After", "Added")
+    logger.info("-" * 58)
+    total_before = 0
+    total_after = 0
+    for table in TABLE_PREFIXES:
+        before = before_counts.get(table, 0)
+        after = after_counts[table]
+        added = after - before
+        total_before += before
+        total_after += after
+        logger.info("%-20s %12s %12s %12s", table, f"{before:,}", f"{after:,}", f"{added:+,}")
+    logger.info("-" * 58)
+    logger.info("%-20s %12s %12s %12s", "TOTAL", f"{total_before:,}", f"{total_after:,}", f"{total_after - total_before:+,}")
     logger.info("Done!")
 
 if __name__ == "__main__":
